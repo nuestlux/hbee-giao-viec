@@ -23,6 +23,15 @@ export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   CANCELLED: 'Đã hủy',
 };
 
+/** Filter danh sách — chỉ các trạng thái hay dùng */
+export const TASK_STATUS_FILTER_OPTIONS: TaskStatus[] = [
+  'ASSIGNED',
+  'IN_PROGRESS',
+  'WAITING_APPROVAL',
+  'COMPLETED',
+  'CANCELLED',
+];
+
 export const DOCUMENT_SOURCE_KIND_LABELS: Record<DocumentSourceKind, string> = {
   NGHI_QUYET: 'Nghị quyết',
   KET_LUAN: 'Kết luận',

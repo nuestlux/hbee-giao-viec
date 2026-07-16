@@ -32,6 +32,7 @@ import { hasPermission } from '../utils/permissions';
 import {
   DOCUMENT_SOURCE_KIND_LABELS,
   PAGE_COPY,
+  TASK_STATUS_FILTER_OPTIONS,
   TASK_STATUS_LABELS,
   URGENCY_LABELS,
 } from '../utils/ui-labels';
@@ -486,7 +487,7 @@ export default function Tasks() {
           aria-label="Lọc trạng thái"
         >
           <option value="all">Mọi trạng thái</option>
-          {(Object.keys(TASK_STATUS_LABELS) as TaskStatus[]).map((s) => (
+          {TASK_STATUS_FILTER_OPTIONS.map((s) => (
             <option key={s} value={s}>
               {TASK_STATUS_LABELS[s]}
             </option>
