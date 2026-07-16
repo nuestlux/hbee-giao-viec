@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   FileText,
@@ -10,6 +10,7 @@ import {
   Building2,
   Briefcase,
   TrendingUp,
+  CalendarRange,
 } from 'lucide-react';
 import {
   PieChart,
@@ -41,6 +42,31 @@ import {
   type ActivityScope,
 } from '../utils/dashboard-stats';
 import { hasPermission } from '../utils/permissions';
+import {
+  TIME_PRESET_OPTIONS,
+  defaultCustomFromTo,
+  formatTimeRangeLabel,
+  isInTimeRange,
+  resolveTimeRange,
+  taskInTimeRange,
+  type TimePreset,
+} from '../utils/dashboard-time-range';
+
+/** Số tháng biểu đồ xu hướng theo preset (giống analytics: zoom theo kỳ). */
+function trendMonthCount(preset: TimePreset, rangeStart: Date | null, rangeEnd: Date | null): number {
+  if (preset === 'year') return 12;
+  if (preset === 'all') return 6;
+  if (preset === 'quarter') return 3;
+  if (preset === 'today' || preset === '7d') return 3;
+  if (rangeStart && rangeEnd) {
+    const months =
+      (rangeEnd.getFullYear() - rangeStart.getFullYear()) * 12 +
+      (rangeEnd.getMonth() - rangeStart.getMonth()) +
+      1;
+    return Math.max(3, Math.min(12, months));
+  }
+  return 6;
+}
 
 type FeatureCard = {
   id: string;
@@ -74,6 +100,43 @@ export default function Dashboard() {
   const notifications = useStore((s) => s.notifications);
   const auditLogs = useStore((s) => s.auditLogs);
 
+  /** Mặc định 30 ngày — pattern phổ biến GA / Jira / Monday. */
+  const [timePreset, setTimePreset] = useState<TimePreset>('30d');
+  const defaults = useMemo(() => defaultCustomFromTo(), []);
+  const [customFrom, setCustomFrom] = useState(defaults.from);
+  const [customTo, setCustomTo] = useState(defaults.to);
+
+  const timeRange = useMemo(
+    () => resolveTimeRange(timePreset, customFrom, customTo),
+    [timePreset, customFrom, customTo],
+  );
+  const timeRangeLabel = useMemo(() => formatTimeRangeLabel(timeRange), [timeRange]);
+
+  /** Dữ liệu nghiệp vụ lọc theo kỳ; user/phòng ban giữ snapshot hiện tại. */
+  const filteredTasks = useMemo(
+    () => tasks.filter((t) => taskInTimeRange(t, timeRange)),
+    [tasks, timeRange],
+  );
+  const filteredDocuments = useMemo(
+    () =>
+      documents.filter(
+        (d) => isInTimeRange(d.receivedDate || d.createdAt, timeRange),
+      ),
+    [documents, timeRange],
+  );
+  const filteredExtensions = useMemo(
+    () => extensions.filter((e) => isInTimeRange(e.createdAt, timeRange)),
+    [extensions, timeRange],
+  );
+  const filteredNotifications = useMemo(
+    () => notifications.filter((n) => isInTimeRange(n.createdAt, timeRange)),
+    [notifications, timeRange],
+  );
+  const filteredAuditLogs = useMemo(
+    () => auditLogs.filter((l) => isInTimeRange(l.createdAt, timeRange)),
+    [auditLogs, timeRange],
+  );
+
   const today = new Intl.DateTimeFormat('vi-VN', {
     weekday: 'long',
     year: 'numeric',
@@ -84,14 +147,14 @@ export default function Dashboard() {
   const stats = useMemo(
     () =>
       deriveDashboardStats({
-        documents,
-        tasks,
-        extensions,
-        notifications,
+        documents: filteredDocuments,
+        tasks: filteredTasks,
+        extensions: filteredExtensions,
+        notifications: filteredNotifications,
         users,
         departments,
       }),
-    [documents, tasks, extensions, notifications, users, departments]
+    [filteredDocuments, filteredTasks, filteredExtensions, filteredNotifications, users, departments]
   );
 
   const isLeader =
@@ -129,7 +192,10 @@ export default function Dashboard() {
     isLeader ||
     isDeptLead;
 
-  const nearDeadlineTasks = useMemo(() => pickNearDeadlineTasks(tasks, 5), [tasks]);
+  const nearDeadlineTasks = useMemo(
+    () => pickNearDeadlineTasks(filteredTasks, 5),
+    [filteredTasks],
+  );
 
   /**
    * Phạm vi hoạt động gần đây — cùng logic card/chart dashboard:
@@ -157,7 +223,7 @@ export default function Dashboard() {
   const recentLogs = useMemo(
     () =>
       pickRecentActivities(
-        auditLogs,
+        filteredAuditLogs,
         users,
         {
           currentUserId: currentUser?.id ?? null,
@@ -169,7 +235,7 @@ export default function Dashboard() {
         5,
       ),
     [
-      auditLogs,
+      filteredAuditLogs,
       users,
       currentUser?.id,
       currentUser?.departmentId,
@@ -199,15 +265,21 @@ export default function Dashboard() {
   const deptWorkData = useMemo(
     () =>
       canSeeDeptWorkChart
-        ? deriveDeptWorkChart(tasks, departments, deptScopeId, deptWorkScopeAll ? 8 : 1)
+        ? deriveDeptWorkChart(
+            filteredTasks,
+            departments,
+            deptScopeId,
+            deptWorkScopeAll ? 8 : 1,
+          )
         : [],
-    [canSeeDeptWorkChart, tasks, departments, deptScopeId, deptWorkScopeAll]
+    [canSeeDeptWorkChart, filteredTasks, departments, deptScopeId, deptWorkScopeAll]
   );
 
-  const taskTrendData = useMemo(
-    () => (canSeeTaskTrend ? deriveTaskTrend(tasks, 6) : []),
-    [canSeeTaskTrend, tasks]
-  );
+  const taskTrendData = useMemo(() => {
+    if (!canSeeTaskTrend) return [];
+    const months = trendMonthCount(timePreset, timeRange.start, timeRange.end);
+    return deriveTaskTrend(filteredTasks, months, timeRange.end);
+  }, [canSeeTaskTrend, filteredTasks, timePreset, timeRange.start, timeRange.end]);
 
   const featureCards = useMemo(() => {
     const cards: FeatureCard[] = [
@@ -275,19 +347,74 @@ export default function Dashboard() {
         ? 'grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5 lg:gap-6'
         : 'grid grid-cols-1 gap-4 sm:gap-5 lg:gap-6';
 
+  const trendMonthsLabel = trendMonthCount(timePreset, timeRange.start, timeRange.end);
+
   return (
     <div className="space-y-6 sm:space-y-7 lg:space-y-8">
-      {/* Welcome */}
+      {/* Welcome + time range filter (GA / Jira style) */}
       <div className="glass p-5 sm:p-6 lg:p-7 rounded-2xl shadow-sm border border-gray-100 bg-gradient-to-r from-white to-primary-50/30">
-        <h2 className="text-xl sm:text-2xl font-bold text-slate-800 tracking-tight leading-snug">
-          Xin chào,{' '}
-          <span className="bg-gradient-to-r from-primary-600 to-indigo-600 text-transparent bg-clip-text">
-            {currentUser?.fullName || 'bạn'}
-          </span>
-        </h2>
-        <p className="text-slate-500 mt-2 capitalize font-medium text-[0.9375rem] sm:text-base leading-relaxed">
-          {today}
-        </p>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <h2 className="text-xl sm:text-2xl font-bold text-slate-800 tracking-tight leading-snug">
+              Xin chào,{' '}
+              <span className="bg-gradient-to-r from-primary-600 to-indigo-600 text-transparent bg-clip-text">
+                {currentUser?.fullName || 'bạn'}
+              </span>
+            </h2>
+            <p className="text-slate-500 mt-2 capitalize font-medium text-[0.9375rem] sm:text-base leading-relaxed">
+              {today}
+            </p>
+          </div>
+
+          <div className="flex flex-col items-stretch sm:items-end gap-2 w-full sm:w-auto">
+            <div className="flex flex-wrap items-center gap-2 justify-start sm:justify-end">
+              <label className="relative inline-flex items-center gap-1.5">
+                <CalendarRange size={15} className="text-primary-600 shrink-0" aria-hidden />
+                <span className="sr-only">Kỳ dữ liệu</span>
+                <select
+                  value={timePreset}
+                  onChange={(e) => setTimePreset(e.target.value as TimePreset)}
+                  className="appearance-none rounded-lg border border-slate-200 bg-white pl-2.5 pr-8 py-2 text-xs sm:text-sm font-semibold text-slate-700 shadow-sm cursor-pointer hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-primary-500/30 min-w-[8.5rem]"
+                  aria-label="Kỳ dữ liệu"
+                >
+                  {TIME_PRESET_OPTIONS.map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">
+                  ▾
+                </span>
+              </label>
+
+              {timePreset === 'custom' && (
+                <>
+                  <input
+                    type="date"
+                    value={customFrom}
+                    max={customTo}
+                    onChange={(e) => setCustomFrom(e.target.value)}
+                    aria-label="Từ ngày"
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs font-medium text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+                  />
+                  <span className="text-slate-400 text-xs">–</span>
+                  <input
+                    type="date"
+                    value={customTo}
+                    min={customFrom}
+                    onChange={(e) => setCustomTo(e.target.value)}
+                    aria-label="Đến ngày"
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs font-medium text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+                  />
+                </>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-400 font-medium self-start sm:self-end">
+              {timeRangeLabel}
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* KPI cards */}
@@ -474,7 +601,9 @@ export default function Dashboard() {
                     Báo cáo
                   </button>
                 </div>
-                <p className="text-xs text-gray-400 mb-2">6 tháng — tạo mới / hoàn thành / quá hạn</p>
+                <p className="text-xs text-gray-400 mb-2">
+                  {trendMonthsLabel} tháng gần nhất trong kỳ — tạo mới / hoàn thành / quá hạn
+                </p>
                 <div className="flex-1 min-h-[200px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={taskTrendData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -636,7 +765,7 @@ export default function Dashboard() {
             Hoạt động gần đây
           </h3>
           <span className="text-xs font-medium text-slate-500 bg-slate-50 border border-slate-100 px-2.5 py-1 rounded-full">
-            {activityScopeHint} · 5 mới nhất
+            {activityScopeHint} · {timeRangeLabel} · 5 mới nhất
           </span>
         </div>
 

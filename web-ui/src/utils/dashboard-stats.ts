@@ -200,9 +200,17 @@ export function deriveDeptWorkChart(
     .map(({ name, open, completed, overdue }) => ({ name, open, completed, overdue }));
 }
 
-/** Xu hướng NV 6 tháng gần nhất theo createdAt / completedDate. */
-export function deriveTaskTrend(tasks: Task[], months = 6): TaskTrendPoint[] {
-  const now = new Date();
+/**
+ * Xu hướng NV theo tháng.
+ * @param rangeEnd — neo cuối kỳ (mặc định hôm nay); dùng với filter thời gian dashboard.
+ * @param months — số tháng nhìn lại từ rangeEnd.
+ */
+export function deriveTaskTrend(
+  tasks: Task[],
+  months = 6,
+  rangeEnd: Date | null = null,
+): TaskTrendPoint[] {
+  const now = rangeEnd ? new Date(rangeEnd) : new Date();
   const buckets: TaskTrendPoint[] = [];
 
   for (let i = months - 1; i >= 0; i--) {

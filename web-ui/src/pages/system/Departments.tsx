@@ -1,7 +1,20 @@
 import React, { useState } from 'react';
-import { Building2, Plus, Edit2, Trash2, Check, Users, ShieldAlert, Key } from 'lucide-react';
+import { Building2, Plus, Edit2, Trash2, Check, Users, ShieldAlert, Key, FileSpreadsheet } from 'lucide-react';
 import { useStore } from '../../store/useStore';
-import { Modal, FormField, inputClass, selectClass, ConfirmDialog } from '../../components';
+import {
+  Modal,
+  FormField,
+  inputClass,
+  selectClass,
+  ConfirmDialog,
+  BulkImportExcelModal,
+} from '../../components';
+import {
+  DEPT_IMPORT_COLUMNS,
+  parseActiveFlag,
+  type BulkImportResult,
+  type ParsedSheet,
+} from '../../utils/excel-bulk-import';
 
 export default function Departments() {
   const { departments, users, addDepartment, updateDepartment, deleteDepartment } = useStore();
@@ -16,6 +29,7 @@ export default function Departments() {
   // Delete Confirm
   const [deleteDialog, setDeleteDialog] = useState<{ isOpen: boolean; id: string; name: string } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   const showToast = (message: string) => {
     setToastMessage(message);
@@ -72,6 +86,71 @@ export default function Departments() {
 
   const getHeadName = (id: string | null) => users.find(u => u.id === id)?.fullName || 'Chưa phân công';
 
+  const handleBulkImport = (rows: ParsedSheet[]): BulkImportResult => {
+    const result: BulkImportResult = {
+      total: rows.length,
+      success: 0,
+      skipped: 0,
+      failed: 0,
+      errors: [],
+      successLabels: [],
+    };
+    // Snapshot codes — gồm cả mã vừa tạo trong lượt này
+    const knownCodes = new Map(
+      useStore.getState().departments.map((d) => [d.code.toLowerCase(), d.id]),
+    );
+
+    for (const row of rows) {
+      const code = row.cells.code?.trim() || '';
+      const name = row.cells.name?.trim() || '';
+      if (!code) {
+        result.failed += 1;
+        result.errors.push({ row: row.excelRow, message: 'Thiếu mã phòng ban' });
+        continue;
+      }
+      if (!name) {
+        result.failed += 1;
+        result.errors.push({ row: row.excelRow, message: 'Thiếu tên phòng ban' });
+        continue;
+      }
+      if (knownCodes.has(code.toLowerCase())) {
+        result.skipped += 1;
+        result.errors.push({
+          row: row.excelRow,
+          message: `Bỏ qua — mã "${code}" đã tồn tại`,
+        });
+        continue;
+      }
+
+      let parentId: string | null = null;
+      const parentCode = row.cells.parentCode?.trim();
+      if (parentCode) {
+        const pid = knownCodes.get(parentCode.toLowerCase());
+        if (!pid) {
+          result.failed += 1;
+          result.errors.push({
+            row: row.excelRow,
+            message: `Không tìm thấy mã phòng cha "${parentCode}"`,
+          });
+          continue;
+        }
+        parentId = pid;
+      }
+
+      const created = addDepartment({
+        code,
+        name,
+        parentId,
+        isActive: parseActiveFlag(row.cells.isActive || '', true),
+      });
+      knownCodes.set(code.toLowerCase(), created.id);
+      result.success += 1;
+      result.successLabels.push(`${code} — ${name}`);
+    }
+
+    return result;
+  };
+
   return (
     <div className="space-y-6">
       {toastMessage && (
@@ -85,14 +164,24 @@ export default function Departments() {
         <h1 className="text-2xl font-bold text-slate-900 tracking-tight leading-snug">
           Phòng ban
         </h1>
-        <button
-          type="button"
-          onClick={() => handleOpenModal()}
-          className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
-        >
-          <Plus size={16} />
-          Thêm
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setImportOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 font-medium text-sm transition-colors"
+          >
+            <FileSpreadsheet size={16} className="text-emerald-600" />
+            Nhập Excel
+          </button>
+          <button
+            type="button"
+            onClick={() => handleOpenModal()}
+            className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+          >
+            <Plus size={16} />
+            Thêm
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">

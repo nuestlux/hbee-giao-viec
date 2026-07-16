@@ -716,8 +716,8 @@ export const useStore = create<AppState>((set, get) => {
       parentId: data.parentId || null,
       headId: data.headId || null,
       deputyHeadId: data.deputyHeadId || null,
-      memberCount: 0,
-      isActive: true,
+      memberCount: data.memberCount ?? 0,
+      isActive: data.isActive !== undefined ? !!data.isActive : true,
     };
     set(s => ({
       departments: [...s.departments, newDept],
@@ -780,7 +780,12 @@ export const useStore = create<AppState>((set, get) => {
   addDocumentType: (data) => {
     const id = uid('doctype');
     set(s => ({
-      documentTypes: [...s.documentTypes, { id, name: data.name || '', code: data.code || '', isActive: true }],
+      documentTypes: [...s.documentTypes, {
+        id,
+        name: data.name || '',
+        code: data.code || '',
+        isActive: data.isActive !== undefined ? !!data.isActive : true,
+      }],
       auditLogs: [createAuditEntry('CREATE', 'DocumentType', id, `Thêm loại văn bản: ${data.name}`), ...s.auditLogs],
     }));
   },
@@ -800,7 +805,12 @@ export const useStore = create<AppState>((set, get) => {
   addTaskCategory: (data) => {
     const id = uid('cat');
     set(s => ({
-      taskCategories: [...s.taskCategories, { id, name: data.name || '', code: data.code || '', isActive: true }],
+      taskCategories: [...s.taskCategories, {
+        id,
+        name: data.name || '',
+        code: data.code || '',
+        isActive: data.isActive !== undefined ? !!data.isActive : true,
+      }],
       auditLogs: [createAuditEntry('CREATE', 'TaskCategory', id, `Thêm nhóm nhiệm vụ: ${data.name}`), ...s.auditLogs],
     }));
   },
@@ -820,7 +830,12 @@ export const useStore = create<AppState>((set, get) => {
   addField: (data) => {
     const id = uid('field');
     set(s => ({
-      fields: [...s.fields, { id, name: data.name || '', code: data.code || '', isActive: true }],
+      fields: [...s.fields, {
+        id,
+        name: data.name || '',
+        code: data.code || '',
+        isActive: data.isActive !== undefined ? !!data.isActive : true,
+      }],
       auditLogs: [createAuditEntry('CREATE', 'Field', id, `Thêm lĩnh vực: ${data.name}`), ...s.auditLogs],
     }));
   },

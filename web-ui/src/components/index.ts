@@ -16,4 +16,5 @@ export { default as Timeline } from './Timeline';
 export { default as Pagination } from './Pagination';
 export { default as FormField, inputClass, selectClass, textareaClass } from './FormField';
 export { default as ConfirmDialog } from './ConfirmDialog';
+export { default as BulkImportExcelModal } from './BulkImportExcelModal';
 export { default as HbeeLogo } from './HbeeLogo';
