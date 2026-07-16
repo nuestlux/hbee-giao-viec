@@ -11,7 +11,7 @@
 |---|---|---|---|---|---|
 | Local | `http://localhost:5173` | Máy dev | — | OK | 2026-07-16 |
 | Staging | _điền sau_ | _Vercel / VPS / …_ | `main` / `develop` | — | — |
-| Production (Pages) | `https://nuestlux.github.io/hbee-giao-viec/` | GitHub Pages | `main` | Deploying | 2026-07-16 |
+| Production (Pages) | `https://nuestlux.github.io/hbee-giao-viec/` | GitHub Pages | `main` | Live | 2026-07-16 |
 | GitHub repo | `https://github.com/nuestlux/hbee-giao-viec` | GitHub | `main` | OK | 2026-07-16 |
 
 ---
