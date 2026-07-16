@@ -1,0 +1,322 @@
+/* H-Bee design tokens — Be Vietnam Pro (VN diacritics) + 8pt spacing rhythm
+   Source: ui-ux-pro-max typography "Vietnamese Friendly" + spacing-scale 4/8 */
+
+@import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500&display=swap');
+
+@import "tailwindcss";
+
+@theme {
+  /* Brand / semantic colors */
+  --color-primary-50: #eff6ff;
+  --color-primary-100: #dbeafe;
+  --color-primary-200: #bfdbfe;
+  --color-primary-300: #93c5fd;
+  --color-primary-400: #60a5fa;
+  --color-primary-500: #3b82f6;
+  --color-primary-600: #2563eb;
+  --color-primary-700: #1d4ed8;
+  --color-primary-800: #1e40af;
+  --color-primary-900: #1e3a8a;
+  --color-primary-950: #172554;
+
+  --color-success-50: #f0fdf4;
+  --color-success-500: #22c55e;
+  --color-success-600: #16a34a;
+
+  --color-warning-50: #fffbeb;
+  --color-warning-500: #f59e0b;
+  --color-warning-600: #d97706;
+
+  --color-danger-50: #fef2f2;
+  --color-danger-500: #ef4444;
+  --color-danger-600: #dc2626;
+
+  --color-sidebar: #0f172a;
+  --color-sidebar-hover: #1e293b;
+  --color-sidebar-active: #1d4ed8;
+
+  /* Surfaces & text (contrast ≥ 4.5:1 body) */
+  --color-surface: #f8fafc;
+  --color-surface-card: #ffffff;
+  --color-ink: #0f172a;
+  --color-ink-muted: #475569;
+  --color-ink-subtle: #64748b;
+
+  /* Typography — Be Vietnam Pro + system fallbacks */
+  --font-sans: 'Be Vietnam Pro', system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans',
+    'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace;
+
+  /* Type scale (px) — 12 14 16 18 20 24 30 36 */
+  --text-xs: 0.8125rem; /* 13px — avoid 11–12 for body-like labels */
+  --text-xs--line-height: 1.45;
+  --text-sm: 0.875rem; /* 14px */
+  --text-sm--line-height: 1.5;
+  --text-base: 1rem; /* 16px */
+  --text-base--line-height: 1.6;
+  --text-lg: 1.125rem; /* 18px */
+  --text-lg--line-height: 1.55;
+  --text-xl: 1.25rem; /* 20px */
+  --text-xl--line-height: 1.45;
+  --text-2xl: 1.5rem; /* 24px */
+  --text-2xl--line-height: 1.35;
+  --text-3xl: 1.875rem; /* 30px */
+  --text-3xl--line-height: 1.3;
+
+  /* Spacing rhythm (8pt base) */
+  --spacing-page-x: 1.5rem;
+  --spacing-page-y: 1.75rem;
+  --spacing-section: 1.5rem;
+  --spacing-card: 1.25rem;
+  --spacing-stack: 1rem;
+}
+
+/* ── Base document ─────────────────────────────────────────── */
+html {
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  font-weight: 400;
+  line-height: 1.6;
+  letter-spacing: 0.01em; /* slightly open — helps VN diacritics */
+  color: var(--color-ink);
+  background-color: var(--color-surface);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'kern' 1, 'liga' 1;
+}
+
+/* Readable defaults for prose elements */
+h1,
+h2,
+h3,
+h4 {
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.3;
+  color: var(--color-ink);
+}
+
+h1 {
+  font-size: 1.5rem; /* 24 */
+  line-height: 1.3;
+}
+
+h2 {
+  font-size: 1.25rem; /* 20 */
+  line-height: 1.35;
+}
+
+h3 {
+  font-size: 1.125rem; /* 18 */
+  line-height: 1.4;
+}
+
+p {
+  line-height: 1.65;
+}
+
+small,
+.text-muted {
+  color: var(--color-ink-muted);
+  line-height: 1.5;
+}
+
+/* Numbers in tables / KPIs stay aligned */
+.tabular-nums,
+td,
+th,
+.font-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Focus visibility (a11y) */
+:focus-visible {
+  outline: 2px solid var(--color-primary-600);
+  outline-offset: 2px;
+}
+
+button:not(:disabled),
+[role='button']:not([aria-disabled='true']),
+a {
+  cursor: pointer;
+}
+
+/* Comfortable min touch height for native form controls */
+input:not([type='checkbox']):not([type='radio']):not([type='range']),
+select,
+textarea {
+  font-family: inherit;
+  font-size: 0.9375rem; /* 15px — avoids iOS zoom, readable */
+  line-height: 1.5;
+}
+
+/* ── Layout helpers ────────────────────────────────────────── */
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.page-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+  color: var(--color-ink);
+}
+
+.page-subtitle {
+  margin-top: 0.375rem;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: var(--color-ink-muted);
+}
+
+.section-gap {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.card-pad {
+  padding: 1.25rem;
+}
+
+@media (min-width: 640px) {
+  .card-pad {
+    padding: 1.5rem;
+  }
+
+  h1,
+  .page-title {
+    font-size: 1.625rem; /* 26 */
+  }
+}
+
+@media (min-width: 1024px) {
+  .page-header {
+    margin-bottom: 1.75rem;
+  }
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+  background-clip: content-box;
+  border: 2px solid transparent;
+}
+
+/* ── Animations ────────────────────────────────────────────── */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.28s ease-out;
+}
+
+.animate-slide-in-right {
+  animation: slideInRight 0.28s ease-out;
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.2s ease-out;
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* Glass / gradient utilities (kept for existing pages) */
+.glass {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.gradient-text {
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none" aria-hidden="true">
+  <!-- Pointy-top hexagon outline -->
+  <path
+    d="M50 6 L88.97 28.5 V71.5 L50 94 L11.03 71.5 V28.5 Z"
+    stroke="#1A1A1A"
+    stroke-width="5.5"
+    stroke-linejoin="round"
+    fill="none"
+  />
+  <!-- Geometric H in brand orange -->
+  <path
+    fill="#E89B18"
+    d="M30 28h12.5v16.5h15V28H70v44H57.5V55.5h-15V72H30V28z"
+  />
+</svg>
