@@ -291,6 +291,20 @@ export default function Departments() {
       </Modal>
 
       <ConfirmDialog isOpen={!!deleteDialog} onClose={() => setDeleteDialog(null)} onConfirm={handleDelete} title="Xóa phòng ban" message={`Xóa "${deleteDialog?.name}"?`} />
+
+      <BulkImportExcelModal
+        isOpen={importOpen}
+        onClose={() => setImportOpen(false)}
+        title="Nhập phòng ban từ Excel"
+        description="Thêm nhiều phòng ban cùng lúc. Mã phòng ban không được trùng với dữ liệu hiện có."
+        columns={DEPT_IMPORT_COLUMNS}
+        templateFilename="Mau_nhap_phong_ban.xlsx"
+        hints={[
+          'Trạng thái: Hoạt động / Khóa (để trống = Hoạt động).',
+          'Mã phòng cha: điền mã đã có trong hệ thống (hoặc vừa nhập phía trên trong cùng file).',
+        ]}
+        onImport={handleBulkImport}
+      />
     </div>
   );
 }

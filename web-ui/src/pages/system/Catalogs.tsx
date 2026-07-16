@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { FileText, CheckSquare, Layers, Plus, Edit2, Trash2, Check } from 'lucide-react';
+import { FileText, CheckSquare, Layers, Plus, Edit2, Trash2, Check, FileSpreadsheet } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 import {
   Modal,
@@ -9,10 +9,17 @@ import {
   FilterBar,
   DataTable,
   Pagination,
+  BulkImportExcelModal,
 } from '../../components';
 import type { Column } from '../../components';
 import { sortRows, toggleSort, type SortState } from '../../utils/table-sort';
 import { useClientPagination } from '../../hooks/use-client-pagination';
+import {
+  CATALOG_IMPORT_COLUMNS,
+  parseActiveFlag,
+  type BulkImportResult,
+  type ParsedSheet,
+} from '../../utils/excel-bulk-import';
 
 type CatalogRow = { id: string; name: string; code: string; isActive: boolean };
 
@@ -38,6 +45,7 @@ export default function Catalogs() {
 
   // Success Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   const showToast = (message: string) => {
     setToastMessage(message);
@@ -135,6 +143,65 @@ export default function Catalogs() {
     { id: 'fields', label: 'Lĩnh vực', icon: Layers },
   ] as const;
 
+  const activeTabLabel = tabs.find((t) => t.id === activeTab)?.label || 'Danh mục';
+
+  const handleBulkImport = (rows: ParsedSheet[]): BulkImportResult => {
+    const result: BulkImportResult = {
+      total: rows.length,
+      success: 0,
+      skipped: 0,
+      failed: 0,
+      errors: [],
+      successLabels: [],
+    };
+    const state = useStore.getState();
+    const existing =
+      activeTab === 'docs'
+        ? state.documentTypes
+        : activeTab === 'tasks'
+          ? state.taskCategories
+          : state.fields;
+    const knownCodes = new Set(existing.map((x) => x.code.toLowerCase()));
+
+    for (const row of rows) {
+      const code = row.cells.code?.trim() || '';
+      const name = row.cells.name?.trim() || '';
+      if (!code) {
+        result.failed += 1;
+        result.errors.push({ row: row.excelRow, message: 'Thiếu mã' });
+        continue;
+      }
+      if (!name) {
+        result.failed += 1;
+        result.errors.push({ row: row.excelRow, message: 'Thiếu tên' });
+        continue;
+      }
+      if (knownCodes.has(code.toLowerCase())) {
+        result.skipped += 1;
+        result.errors.push({
+          row: row.excelRow,
+          message: `Bỏ qua — mã "${code}" đã tồn tại`,
+        });
+        continue;
+      }
+
+      const payload = {
+        code,
+        name,
+        isActive: parseActiveFlag(row.cells.isActive || '', true),
+      };
+      if (activeTab === 'docs') addDocumentType(payload);
+      else if (activeTab === 'tasks') addTaskCategory(payload);
+      else addField(payload);
+
+      knownCodes.add(code.toLowerCase());
+      result.success += 1;
+      result.successLabels.push(`${code} — ${name}`);
+    }
+
+    return result;
+  };
+
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       {toastMessage && (
@@ -169,13 +236,24 @@ export default function Catalogs() {
           })}
         </div>
 
-        <button 
-          onClick={() => handleOpenModal()}
-          className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
-        >
-          <Plus size={16} />
-          Thêm mới
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setImportOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 font-medium text-sm transition-colors"
+          >
+            <FileSpreadsheet size={16} className="text-emerald-600" />
+            Nhập Excel
+          </button>
+          <button
+            type="button"
+            onClick={() => handleOpenModal()}
+            className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
+          >
+            <Plus size={16} />
+            Thêm mới
+          </button>
+        </div>
       </div>
 
       <FilterBar
@@ -337,6 +415,17 @@ export default function Catalogs() {
         onConfirm={handleDelete}
         title="Xác nhận xóa"
         message={`Xóa "${deleteDialog?.name}"?`}
+      />
+
+      <BulkImportExcelModal
+        isOpen={importOpen}
+        onClose={() => setImportOpen(false)}
+        title={`Nhập ${activeTabLabel.toLowerCase()} từ Excel`}
+        description={`Thêm nhiều mục "${activeTabLabel}" theo tab đang chọn. Mã không được trùng.`}
+        columns={CATALOG_IMPORT_COLUMNS}
+        templateFilename={`Mau_nhap_${activeTab === 'docs' ? 'loai_van_ban' : activeTab === 'tasks' ? 'nhom_nhiem_vu' : 'linh_vuc'}.xlsx`}
+        hints={['Trạng thái: Hoạt động / Khóa (để trống = Hoạt động).']}
+        onImport={handleBulkImport}
       />
     </div>
   );

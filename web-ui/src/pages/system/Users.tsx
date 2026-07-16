@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   UserPlus, Shield, Mail, Building2, Check, Pencil, Trash2, KeyRound, Copy, Dices,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 import {
@@ -14,12 +15,21 @@ import {
   filterSelectClass,
   DataTable,
   Pagination,
+  BulkImportExcelModal,
 } from '../../components';
 import type { Column } from '../../components';
 import type { User, UserRole } from '../../types';
 import { hasPermission } from '../../utils/permissions';
 import { sortRows, toggleSort, type SortState } from '../../utils/table-sort';
 import { useClientPagination } from '../../hooks/use-client-pagination';
+import {
+  USER_IMPORT_COLUMNS,
+  parseActiveFlag,
+  parseUserRole,
+  roleImportHint,
+  type BulkImportResult,
+  type ParsedSheet,
+} from '../../utils/excel-bulk-import';
 
 /** Mật khẩu tạm dễ đọc — admin copy gửi user. */
 function generateTempPassword(): string {
@@ -75,6 +85,7 @@ export default function Users() {
   } | null>(null);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
   const showToast = (message: string) => {
     setToastMessage(message);
     setTimeout(() => setToastMessage(null), 3500);
@@ -255,6 +266,94 @@ export default function Users() {
     showToast(`Đã đặt lại mật khẩu cho ${resetDialog.name}`);
   };
 
+  const handleBulkImport = (rows: ParsedSheet[]): BulkImportResult => {
+    const result: BulkImportResult = {
+      total: rows.length,
+      success: 0,
+      skipped: 0,
+      failed: 0,
+      errors: [],
+      successLabels: [],
+    };
+    const state = useStore.getState();
+    const emails = new Set(state.users.map((u) => u.email.toLowerCase()));
+    const deptByCode = new Map(
+      state.departments.map((d) => [d.code.toLowerCase(), d]),
+    );
+    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    for (const row of rows) {
+      const fullName = row.cells.fullName?.trim() || '';
+      const email = row.cells.email?.trim().toLowerCase() || '';
+      const phone = row.cells.phone?.trim() || '';
+      const departmentCode = row.cells.departmentCode?.trim() || '';
+      const roleRaw = row.cells.role?.trim() || '';
+      const position = row.cells.position?.trim() || '';
+
+      if (!fullName) {
+        result.failed += 1;
+        result.errors.push({ row: row.excelRow, message: 'Thiếu họ và tên' });
+        continue;
+      }
+      if (!email) {
+        result.failed += 1;
+        result.errors.push({ row: row.excelRow, message: 'Thiếu email' });
+        continue;
+      }
+      if (!emailRe.test(email)) {
+        result.failed += 1;
+        result.errors.push({ row: row.excelRow, message: `Email không hợp lệ: ${email}` });
+        continue;
+      }
+      if (emails.has(email)) {
+        result.skipped += 1;
+        result.errors.push({
+          row: row.excelRow,
+          message: `Bỏ qua — email "${email}" đã tồn tại`,
+        });
+        continue;
+      }
+      if (!departmentCode) {
+        result.failed += 1;
+        result.errors.push({ row: row.excelRow, message: 'Thiếu mã phòng ban' });
+        continue;
+      }
+      const dept = deptByCode.get(departmentCode.toLowerCase());
+      if (!dept) {
+        result.failed += 1;
+        result.errors.push({
+          row: row.excelRow,
+          message: `Không tìm thấy phòng ban mã "${departmentCode}"`,
+        });
+        continue;
+      }
+      const role = parseUserRole(roleRaw);
+      if (!role) {
+        result.failed += 1;
+        result.errors.push({
+          row: row.excelRow,
+          message: `Vai trò không hợp lệ: "${roleRaw || '(trống)'}"`,
+        });
+        continue;
+      }
+
+      const created = addUser({
+        fullName,
+        email,
+        phone,
+        role,
+        departmentId: dept.id,
+        position: position || roleLabels[role] || '',
+        isActive: parseActiveFlag(row.cells.isActive || '', true),
+      });
+      emails.add(email);
+      result.success += 1;
+      result.successLabels.push(`${created.fullName} (${created.email})`);
+    }
+
+    return result;
+  };
+
   return (
     <div className="space-y-6">
       {toastMessage && (
@@ -275,14 +374,24 @@ export default function Users() {
           </span>
         </div>
         {canManage && (
-          <button
-            type="button"
-            onClick={() => handleOpenModal()}
-            className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
-          >
-            <UserPlus size={16} />
-            Thêm
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setImportOpen(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 font-medium text-sm transition-colors"
+            >
+              <FileSpreadsheet size={16} className="text-emerald-600" />
+              Nhập Excel
+            </button>
+            <button
+              type="button"
+              onClick={() => handleOpenModal()}
+              className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
+            >
+              <UserPlus size={16} />
+              Thêm
+            </button>
+          </div>
         )}
       </div>
 
@@ -685,6 +794,23 @@ export default function Users() {
           </div>
         )}
       </Modal>
+
+      {canManage && (
+        <BulkImportExcelModal
+          isOpen={importOpen}
+          onClose={() => setImportOpen(false)}
+          title="Nhập người dùng từ Excel"
+          description="Thêm nhiều tài khoản cùng lúc. Email không được trùng. Mã phòng ban phải đã có trong hệ thống."
+          columns={USER_IMPORT_COLUMNS}
+          templateFilename="Mau_nhap_nguoi_dung.xlsx"
+          hints={[
+            `Vai trò (mã hoặc tên): ${roleImportHint()}.`,
+            'Trạng thái: Hoạt động / Khóa (để trống = Hoạt động).',
+            'Mật khẩu mặc định sau khi nhập: dùng chức năng Đặt lại mật khẩu để cấp mật khẩu tạm.',
+          ]}
+          onImport={handleBulkImport}
+        />
+      )}
     </div>
   );
 }
