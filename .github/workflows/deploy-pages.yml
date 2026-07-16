@@ -35,7 +35,8 @@ jobs:
       - name: Install & build
         working-directory: web-ui
         run: |
-          npm ci
+          # npm install (not ci): lockfile may omit optional platform deps from Windows
+          npm install
           npm run build
 
       - name: Upload Pages artifact
