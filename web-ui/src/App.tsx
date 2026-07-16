@@ -15,9 +15,12 @@ import Departments from './pages/system/Departments';
 import Catalogs from './pages/system/Catalogs';
 import SystemSettings from './pages/system/SystemSettings';
 
+/** Vite BASE_URL is e.g. "/hbee-giao-viec/" on GitHub Pages; Router needs no trailing slash. */
+const routerBasename = import.meta.env.BASE_URL.replace(/\/$/, '') || '/';
+
 function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={routerBasename === '/' ? undefined : routerBasename}>
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route
