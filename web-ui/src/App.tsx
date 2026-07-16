@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { HashRouter, Routes, Route } from 'react-router-dom';
 import MainLayout from './layouts/MainLayout';
 import RequireAuth from './components/RequireAuth';
 import Login from './pages/Login';
@@ -15,12 +15,13 @@ import Departments from './pages/system/Departments';
 import Catalogs from './pages/system/Catalogs';
 import SystemSettings from './pages/system/SystemSettings';
 
-/** Vite BASE_URL is e.g. "/hbee-giao-viec/" on GitHub Pages; Router needs no trailing slash. */
-const routerBasename = import.meta.env.BASE_URL.replace(/\/$/, '') || '/';
-
+/**
+ * HashRouter: works on GitHub Pages without server SPA rewrite.
+ * URLs look like /hbee-giao-viec/#/login — no hard 404 on refresh/other machines.
+ */
 function App() {
   return (
-    <BrowserRouter basename={routerBasename === '/' ? undefined : routerBasename}>
+    <HashRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route
@@ -45,7 +46,7 @@ function App() {
           <Route path="system/catalogs" element={<Catalogs />} />
         </Route>
       </Routes>
-    </BrowserRouter>
+    </HashRouter>
   );
 }
 
