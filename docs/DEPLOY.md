@@ -11,8 +11,8 @@
 |---|---|---|---|---|---|
 | Local | `http://localhost:5173` | Máy dev | — | OK | 2026-07-16 |
 | Staging | _điền sau_ | _Vercel / VPS / …_ | `main` / `develop` | — | — |
-| Production | _điền sau_ | _…_ | `main` | — | — |
-| GitHub repo | _điền sau khi tạo_ | GitHub | `main` | — | — |
+| Production (Pages) | `https://nuestlux.github.io/hbee-giao-viec/` | GitHub Pages | `main` | Deploying | 2026-07-16 |
+| GitHub repo | `https://github.com/nuestlux/hbee-giao-viec` | GitHub | `main` | OK | 2026-07-16 |
 
 ---
 
@@ -20,11 +20,13 @@
 
 | Mục | Giá trị |
 |---|---|
-| GitHub org/user | _điền_ (vd. `nuestlux`) |
-| Tên repo | _điền_ (vd. `hbee-giao-viec`) |
-| Visibility | Private (khuyến nghị) / Public |
+| GitHub org/user | `nuestlux` |
+| Tên repo | `hbee-giao-viec` |
+| Visibility | Public |
 | Default branch | `main` |
-| Pages URL | `https://<user>.github.io/<repo>/` (nếu bật Pages) |
+| Pages URL | `https://nuestlux.github.io/hbee-giao-viec/` |
+| Pages source | GitHub Actions (`.github/workflows/deploy-pages.yml`) |
+| Vite `base` | `/hbee-giao-viec/` |
 
 ### Lệnh tạo repo lần đầu (khi đã `gh auth login`)
 
@@ -130,7 +132,8 @@ Ghi mỗi lần release (mới nhất trên cùng):
 
 | Ngày | Môi trường | Version / commit | Người | Ghi chú |
 |---|---|---|---|---|
-| 2026-07-16 | — | init repo | — | Chuẩn bị source + docs; chờ push GitHub |
+| 2026-07-16 | production (Pages) | a1c5892 | nuestlux | Tạo repo public, push main, bật Pages Actions |
+| 2026-07-16 | — | 4812f63 | — | Chuẩn bị source + docs local |
 
 **Template dòng mới:**
 
