@@ -35,6 +35,7 @@ function App() {
           <Route index element={<Dashboard />} />
           <Route path="documents" element={<IncomingDocuments />} />
           <Route path="tasks" element={<Tasks />} />
+          {/* id = "new" → create workspace; otherwise task detail */}
           <Route path="tasks/:id" element={<TaskDetail />} />
           <Route path="department-work" element={<DepartmentWork />} />
           <Route path="reports" element={<Reports />} />

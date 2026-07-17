@@ -1,18 +1,15 @@
-import { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   Clock,
-  Calendar,
-  CheckCircle2,
   MessageSquare,
   Send,
   AlertCircle,
-  Building2,
-  UserCircle2,
   FileText,
   CalendarClock,
   Check,
+  History,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import {
@@ -25,9 +22,16 @@ import {
   inputClass,
   textareaClass,
   selectClass,
+  TaskFormFields,
+  ExpandableSection,
+  DataTable,
 } from '../components';
 import type { TaskStatus } from '../types';
-import { hasPermission } from '../utils/permissions';
+import {
+  canEditTaskMeta,
+  canUpdateTaskProgress,
+  hasPermission,
+} from '../utils/permissions';
 import { EXTENSION_STATUS_LABELS, TASK_STATUS_LABELS } from '../utils/ui-labels';
 import {
   PROGRESS_LEVELS,
@@ -35,15 +39,35 @@ import {
   snapProgressToLevel,
   type ProgressLevelValue,
 } from '../utils/progress-levels';
+import {
+  computeProgressLevel,
+  getProgressLevelLabel as getDeadlineLevelLabel,
+} from '../utils/report-progress-level';
+import { emptyTaskForm, isTaskFormValid, taskToFormData } from '../utils/task-form';
+import {
+  buildTaskChangeHistory,
+  type TaskChangeHistoryRow,
+} from '../utils/task-change-history';
+import type { ProgressLevelCode } from '../types';
+
+type WorkspaceMode = 'create' | 'view' | 'edit';
 
 export default function TaskDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const isCreate = id === 'new';
+
   const {
     tasks,
     progressUpdates,
     taskComments,
     extensionRequests,
+    auditLogs,
+    departments,
+    users,
+    taskCategories,
+    fields,
     currentUser,
     roles,
     changeTaskStatus,
@@ -52,23 +76,24 @@ export default function TaskDetail() {
     addExtensionRequest,
     approveExtension,
     rejectExtension,
+    addTask,
+    updateTask,
   } = useStore();
 
-  const task = tasks.find((t) => t.id === id);
-  const updates = progressUpdates
-    .filter((p) => p.taskId === id)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  const comments = taskComments
-    .filter((c) => c.taskId === id)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  const extensions = extensionRequests
-    .filter((e) => e.taskId === id)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const task = useMemo(
+    () => (isCreate ? undefined : tasks.find((t) => t.id === id)),
+    [tasks, id, isCreate],
+  );
 
-  const canUpdateProgress =
-    hasPermission(currentUser, roles, 'task.update') ||
-    task?.assigneeId === currentUser?.id ||
-    task?.assignerId === currentUser?.id;
+  const canCreate =
+    hasPermission(currentUser, roles, 'task.create') ||
+    hasPermission(currentUser, roles, 'task.assign');
+  /** Meta (tiêu đề, phân công…) — KHÔNG dùng task.update (đó là tiến độ). */
+  const canEditMeta = canEditTaskMeta(currentUser, roles, task);
+  /** Tiến độ: task.update hoặc người được giao / người giao / cùng phòng (chưa gán người). */
+  const canUpdateProgress = canUpdateTaskProgress(currentUser, roles, task);
+  /** Vào màn Sửa nếu sửa meta HOẶC cập nhật tiến độ. */
+  const canOpenEdit = canEditMeta || canUpdateProgress;
   const canChangeStatus =
     canUpdateProgress ||
     hasPermission(currentUser, roles, 'task.accept') ||
@@ -79,15 +104,126 @@ export default function TaskDetail() {
     task?.assigneeId === currentUser?.id;
   const canApproveExt = hasPermission(currentUser, roles, 'extension.approve');
 
-  const [isProgressModalOpen, setIsProgressModalOpen] = useState(false);
+  const wantEdit = searchParams.get('edit') === '1';
+  const [editingLocal, setEditingLocal] = useState(false);
+  const mode: WorkspaceMode = isCreate
+    ? 'create'
+    : editingLocal || (wantEdit && canOpenEdit)
+      ? 'edit'
+      : 'view';
+
+  const [formData, setFormData] = useState(() =>
+    isCreate ? emptyTaskForm() : task ? taskToFormData(task) : emptyTaskForm(),
+  );
+  const [progressNote, setProgressNote] = useState('');
+  const [progressDifficulties, setProgressDifficulties] = useState('');
+  const [progressSuggestions, setProgressSuggestions] = useState('');
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (isCreate) {
+      setFormData(emptyTaskForm());
+      setDirty(false);
+      setEditingLocal(false);
+      return;
+    }
+    // Reset when task id changes (incl. post-create navigate)
+    if (task) {
+      setFormData(taskToFormData(task));
+      setDirty(false);
+      // Only auto-edit if URL says so AND allowed
+      setEditingLocal(wantEdit && canOpenEdit);
+    }
+  }, [task?.id, isCreate]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!isCreate && wantEdit) {
+      if (canOpenEdit) {
+        setEditingLocal(true);
+        if (task) setFormData(taskToFormData(task));
+      } else {
+        setEditingLocal(false);
+        searchParams.delete('edit');
+        setSearchParams(searchParams, { replace: true });
+      }
+    }
+  }, [wantEdit, isCreate, canOpenEdit, task?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const comments = taskComments
+    .filter((c) => c.taskId === id)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const extensions = extensionRequests
+    .filter((e) => e.taskId === id)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  const changeHistory = useMemo(() => {
+    if (!id || isCreate) return [] as TaskChangeHistoryRow[];
+    return buildTaskChangeHistory({
+      taskId: id,
+      auditLogs,
+      progressUpdates,
+      extensions: extensionRequests,
+      comments: taskComments,
+    });
+  }, [id, isCreate, auditLogs, progressUpdates, extensionRequests, taskComments]);
+
+  const historyColumns = useMemo(
+    () => [
+      {
+        key: 'time',
+        title: 'Thời gian',
+        width: '11rem',
+        render: (row: TaskChangeHistoryRow) => (
+          <span className="text-xs text-slate-600 whitespace-nowrap">
+            {new Date(row.createdAt).toLocaleString('vi-VN')}
+          </span>
+        ),
+      },
+      {
+        key: 'user',
+        title: 'Người thực hiện',
+        width: '9rem',
+        render: (row: TaskChangeHistoryRow) => (
+          <span className="text-sm font-medium text-slate-900">{row.userName}</span>
+        ),
+      },
+      {
+        key: 'kind',
+        title: 'Loại',
+        width: '8rem',
+        render: (row: TaskChangeHistoryRow) => {
+          const tone: Record<TaskChangeHistoryRow['kindTone'], string> = {
+            neutral: 'bg-slate-100 text-slate-700',
+            blue: 'bg-blue-50 text-blue-700',
+            amber: 'bg-amber-50 text-amber-800',
+            emerald: 'bg-emerald-50 text-emerald-700',
+            slate: 'bg-slate-100 text-slate-600',
+            violet: 'bg-violet-50 text-violet-700',
+          };
+          return (
+            <span
+              className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${tone[row.kindTone]}`}
+            >
+              {row.kind}
+            </span>
+          );
+        },
+      },
+      {
+        key: 'detail',
+        title: 'Nội dung thay đổi',
+        render: (row: TaskChangeHistoryRow) => (
+          <span className="text-sm text-slate-700 whitespace-pre-wrap break-words">
+            {row.detail}
+          </span>
+        ),
+      },
+    ],
+    [],
+  );
+
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
   const [isExtModalOpen, setIsExtModalOpen] = useState(false);
-  const [progressData, setProgressData] = useState({
-    progress: task?.progress || 0,
-    content: '',
-    difficulties: '',
-    suggestions: '',
-  });
   const [statusData, setStatusData] = useState<{ status: TaskStatus }>({
     status: task?.status || 'IN_PROGRESS',
   });
@@ -100,43 +236,147 @@ export default function TaskDetail() {
     setTimeout(() => setToast(null), 2800);
   };
 
-  if (!task) {
-    return (
-      <div className="flex flex-col items-center justify-center h-[60vh]">
-        <AlertCircle size={48} className="text-gray-400 mb-4" />
-        <h2 className="text-xl font-semibold text-gray-900 mb-2">Không tìm thấy nhiệm vụ</h2>
-        <button onClick={() => navigate('/tasks')} className="text-primary-600 hover:underline">
-          Quay lại danh sách
-        </button>
-      </div>
-    );
-  }
+  const patchForm = (next: Partial<typeof formData>) => {
+    setFormData(next);
+    setDirty(true);
+  };
 
-  const handleUpdateProgress = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canUpdateProgress) {
-      showToast('Không có quyền sửa tiến độ');
+  const clearEditQuery = () => {
+    if (!wantEdit) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('edit');
+    setSearchParams(next, { replace: true });
+  };
+
+  const resetProgressDraft = () => {
+    setProgressNote('');
+    setProgressDifficulties('');
+    setProgressSuggestions('');
+  };
+
+  const exitEdit = () => {
+    if (task) setFormData(taskToFormData(task));
+    resetProgressDraft();
+    setEditingLocal(false);
+    setDirty(false);
+    clearEditQuery();
+  };
+
+  const handleBack = () => {
+    if ((mode === 'edit' || mode === 'create') && dirty) {
+      if (!window.confirm('Có thay đổi chưa lưu. Rời trang?')) return;
+    }
+    navigate('/tasks');
+  };
+
+  const applyProgressIfNeeded = (taskId: string, previous: number, next: number) => {
+    const hasNote =
+      Boolean(progressNote.trim()) ||
+      Boolean(progressDifficulties.trim()) ||
+      Boolean(progressSuggestions.trim());
+    // Allow save if mốc đổi HOẶC có ghi chú/khó khăn/đề xuất (cùng mốc vẫn cập nhật ghi nhận)
+    if (next === previous && !hasNote) return false;
+    addProgressUpdate({
+      taskId,
+      progress: next,
+      content: progressNote.trim() || (next === previous ? 'Bổ sung khó khăn / đề xuất' : 'Cập nhật tiến độ'),
+      difficulties: progressDifficulties.trim() || undefined,
+      suggestions: progressSuggestions.trim() || undefined,
+    });
+    return true;
+  };
+
+  const handleSaveMeta = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (mode === 'create') {
+      if (!isTaskFormValid(formData)) {
+        showToast('Nhập đủ các mục bắt buộc');
+        return;
+      }
+      if (!canCreate) {
+        showToast('Không có quyền giao việc');
+        return;
+      }
+      const created = addTask({ ...formData, status: 'ASSIGNED' });
+      if (!created) {
+        showToast('Không có quyền giao việc');
+        return;
+      }
+      showToast('Đã giao việc');
+      setDirty(false);
+      setEditingLocal(false);
+      navigate(`/tasks/${created.id}`, { replace: true });
       return;
     }
-    addProgressUpdate({
-      taskId: task.id,
-      progress: progressData.progress,
-      content: progressData.content,
-      difficulties: progressData.difficulties || undefined,
-      suggestions: progressData.suggestions || undefined,
-    });
-    setIsProgressModalOpen(false);
-    setProgressData({
-      progress: progressData.progress,
-      content: '',
-      difficulties: '',
-      suggestions: '',
-    });
-    showToast('Đã lưu tiến độ');
+
+    if (!task || !canOpenEdit) {
+      showToast('Không có quyền sửa');
+      return;
+    }
+
+    const nextProgress = snapProgressToLevel(formData.progress ?? task.progress ?? 0);
+    const prevProgress = snapProgressToLevel(task.progress);
+    const progressChanged = nextProgress !== prevProgress;
+
+    // ── Chỉ quyền tiến độ (chuyên viên / người được giao) ──
+    if (canUpdateProgress && !canEditMeta) {
+      const ok = applyProgressIfNeeded(task.id, prevProgress, nextProgress);
+      if (!ok) {
+        showToast('Đổi mốc tiến độ hoặc nhập ghi chú / khó khăn / đề xuất rồi Lưu');
+        return;
+      }
+      showToast('Đã cập nhật tiến độ');
+      resetProgressDraft();
+      setEditingLocal(false);
+      setDirty(false);
+      clearEditQuery();
+      const updated = useStore.getState().tasks.find((t) => t.id === task.id);
+      if (updated) setFormData(taskToFormData(updated));
+      return;
+    }
+
+    if (!canEditMeta) {
+      showToast('Không có quyền sửa');
+      return;
+    }
+
+    if (!isTaskFormValid(formData)) {
+      showToast('Nhập đủ các mục bắt buộc');
+      return;
+    }
+
+    // Tiến độ trước (previousProgress đúng), rồi meta (bỏ progress khỏi patch)
+    const progressSaved =
+      canUpdateProgress && applyProgressIfNeeded(task.id, prevProgress, nextProgress);
+
+    const metaPatch: Partial<typeof formData> = { ...formData };
+    delete metaPatch.progress;
+
+    const ok = updateTask(task.id, metaPatch);
+    if (!ok) {
+      showToast(
+        progressSaved
+          ? 'Đã cập nhật tiến độ; phần thông tin khác không lưu được (thiếu quyền)'
+          : 'Không sửa được — kiểm tra quyền',
+      );
+      if (progressSaved) {
+        resetProgressDraft();
+        setEditingLocal(false);
+        setDirty(false);
+        clearEditQuery();
+      }
+      return;
+    }
+    showToast(progressSaved ? 'Đã lưu (kèm tiến độ)' : 'Đã lưu');
+    resetProgressDraft();
+    setEditingLocal(false);
+    setDirty(false);
+    clearEditQuery();
   };
 
   const handleUpdateStatus = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!task) return;
     const ok = changeTaskStatus(task.id, statusData.status);
     if (!ok) {
       showToast('Không có quyền đổi trạng thái');
@@ -148,14 +388,14 @@ export default function TaskDetail() {
 
   const handleAddComment = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!commentText.trim()) return;
+    if (!task || !commentText.trim()) return;
     addComment({ taskId: task.id, content: commentText.trim() });
     setCommentText('');
   };
 
   const handleExtension = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canRequestExt) {
+    if (!task || !canRequestExt) {
       showToast('Không có quyền yêu cầu gia hạn');
       return;
     }
@@ -170,8 +410,68 @@ export default function TaskDetail() {
     showToast('Đã gửi yêu cầu gia hạn');
   };
 
+  if (!isCreate && !task) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[60vh]">
+        <AlertCircle size={48} className="text-gray-400 mb-4" />
+        <h2 className="text-xl font-semibold text-gray-900 mb-2">Không tìm thấy nhiệm vụ</h2>
+        <button type="button" onClick={() => navigate('/tasks')} className="text-primary-600 hover:underline">
+          Quay lại danh sách
+        </button>
+      </div>
+    );
+  }
+
+  if (isCreate && !canCreate) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[60vh]">
+        <AlertCircle size={48} className="text-gray-400 mb-4" />
+        <h2 className="text-xl font-semibold text-gray-900 mb-2">Không có quyền giao việc</h2>
+        <button type="button" onClick={() => navigate('/tasks')} className="text-primary-600 hover:underline">
+          Quay lại danh sách
+        </button>
+      </div>
+    );
+  }
+
+  const readOnly = mode === 'view';
+  const displayTitle = mode === 'create' ? formData.title || 'Giao việc mới' : task?.title || '';
+  const displayStatus = task?.status;
+  const displayUrgency = mode === 'view' ? task?.urgency : formData.urgency;
+
+  const asOfToday = new Date().toISOString().slice(0, 10);
+  const deadlineLevel: ProgressLevelCode | null = task
+    ? computeProgressLevel(task.dueDate, task.completedDate, task.status, asOfToday)
+    : null;
+  const deadlineLevelLabel = deadlineLevel ? getDeadlineLevelLabel(deadlineLevel) : '';
+  const deadlineBadgeClass =
+    deadlineLevel === 'OVERDUE'
+      ? 'bg-red-50 text-red-700'
+      : deadlineLevel === 'NEAR_DEADLINE'
+        ? 'bg-amber-50 text-amber-800'
+        : 'bg-emerald-50 text-emerald-700';
+
+  const approvedExts = extensions.filter((e) => e.status === 'APPROVED');
+  const extCount = approvedExts.length;
+  const lastExtPreviousDue =
+    approvedExts.length > 0
+      ? [...approvedExts].sort(
+          (a, b) =>
+            new Date(b.decidedAt || b.createdAt).getTime() -
+            new Date(a.decidedAt || a.createdAt).getTime(),
+        )[0].currentDueDate
+      : null;
+
+  const coordinatingLabel = (ids: string[] | undefined) =>
+    (ids || [])
+      .map((cid) => departments.find((d) => d.id === cid)?.name || cid)
+      .filter(Boolean)
+      .join('; ') || '—';
+
+  const progressValue = mode === 'edit' ? (formData.progress ?? task?.progress ?? 0) : (task?.progress ?? 0);
+
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
+    <div className="max-w-6xl mx-auto space-y-4 pb-8">
       {toast && (
         <div className="fixed top-4 right-4 z-[210] bg-emerald-500 text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 text-sm">
           <Check size={16} />
@@ -179,171 +479,403 @@ export default function TaskDetail() {
         </div>
       )}
 
-      <div className="flex flex-col sm:flex-row sm:items-start gap-4">
-        <button
-          type="button"
-          onClick={() => navigate('/tasks')}
-          className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 transition-colors shrink-0 self-start"
-        >
-          <ArrowLeft size={20} />
-        </button>
-        <div className="flex-1 min-w-0">
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight leading-snug flex flex-wrap items-center gap-3">
-            {task.title}
-            <StatusBadge status={task.status} />
-            <UrgencyBadge urgency={task.urgency} />
-          </h1>
-          <div className="text-sm text-gray-500 mt-1 flex flex-wrap items-center gap-4">
-            <span className="flex items-center gap-1">
-              <FileText size={14} /> {task.categoryName || '—'}
-            </span>
-            <span className="flex items-center gap-1">
-              <Calendar size={14} /> Hạn:{' '}
-              {task.dueDate ? new Date(task.dueDate).toLocaleDateString('vi-VN') : '—'}
-            </span>
-            <span className="text-xs">Giao bởi: {task.assignerName || '—'}</span>
+      {/* Header — title + badges + actions */}
+      <div className="sticky top-0 z-20 -mx-1 px-1 py-2.5 bg-[#f8fafc]/95 backdrop-blur border-b border-slate-100/80">
+        <div className="flex flex-col sm:flex-row sm:items-start gap-3">
+          <button
+            type="button"
+            onClick={handleBack}
+            className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 transition-colors shrink-0 self-start"
+            aria-label="Quay lại"
+          >
+            <ArrowLeft size={20} />
+          </button>
+          <div className="flex-1 min-w-0 space-y-1.5">
+            {(mode === 'create' || (mode === 'edit' && canEditMeta)) ? (
+              <input
+                type="text"
+                value={formData.title || ''}
+                onChange={(e) => patchForm({ ...formData, title: e.target.value })}
+                className="w-full text-xl sm:text-2xl font-bold text-slate-900 tracking-tight bg-white border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-primary-500"
+                placeholder="Tên nhiệm vụ"
+                required
+              />
+            ) : (
+              <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight leading-snug">
+                {displayTitle}
+              </h1>
+            )}
+            {task && (
+              <div className="flex flex-wrap items-center gap-2">
+                {displayStatus && <StatusBadge status={displayStatus} />}
+                {(displayUrgency || task.urgency) && (
+                  <UrgencyBadge urgency={displayUrgency || task.urgency} />
+                )}
+                {deadlineLevelLabel && (
+                  <span
+                    className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${deadlineBadgeClass}`}
+                  >
+                    {deadlineLevelLabel}
+                  </span>
+                )}
+                <span className="text-xs text-slate-500">
+                  {task.categoryName || '—'}
+                  {task.dueDate
+                    ? ` · Hạn ${new Date(task.dueDate).toLocaleDateString('vi-VN')}`
+                    : ''}
+                  {task.assignerName ? ` · ${task.assignerName}` : ''}
+                </span>
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2 shrink-0">
+            {mode === 'view' && canOpenEdit && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (task) setFormData(taskToFormData(task));
+                  resetProgressDraft();
+                  setEditingLocal(true);
+                  setDirty(false);
+                }}
+                className="px-3 py-1.5 text-sm font-medium bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+              >
+                {canEditMeta ? 'Sửa' : 'Cập nhật tiến độ'}
+              </button>
+            )}
+            {mode === 'view' && canChangeStatus && task && (
+              <button
+                type="button"
+                onClick={() => {
+                  setStatusData({ status: task.status });
+                  setIsStatusModalOpen(true);
+                }}
+                className="px-3 py-1.5 text-sm font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
+              >
+                Trạng thái
+              </button>
+            )}
+            {mode === 'view' && canRequestExt && task && (
+              <button
+                type="button"
+                onClick={() => setIsExtModalOpen(true)}
+                className="px-3 py-1.5 text-sm font-medium bg-amber-50 text-amber-800 rounded-lg hover:bg-amber-100 inline-flex items-center gap-1"
+              >
+                <CalendarClock size={14} />
+                Gia hạn
+              </button>
+            )}
+            {(mode === 'edit' || mode === 'create') && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (mode === 'create') handleBack();
+                    else exitEdit();
+                  }}
+                  className="px-3 py-1.5 text-sm font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSaveMeta()}
+                  className="px-3 py-1.5 text-sm font-medium bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+                >
+                  {mode === 'create' ? 'Giao việc' : 'Lưu'}
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          <div className="glass rounded-xl p-6 border border-gray-100">
-            <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
-              <FileText size={18} className="text-primary-600" />
-              Nội dung nhiệm vụ
-            </h3>
-            <div className="prose prose-sm max-w-none text-gray-700 whitespace-pre-wrap">
-              {task.description || 'Không có mô tả chi tiết.'}
-            </div>
-
-            <div className="mt-6 pt-6 border-t border-gray-100 grid grid-cols-2 gap-6">
-              <div>
-                <span className="text-sm text-gray-500 block mb-1">Giao cho phòng ban</span>
-                <div className="flex items-center gap-2 font-medium text-gray-900">
-                  <Building2 size={16} className="text-gray-400" />
-                  {task.assignedDepartmentName || '—'}
-                </div>
-              </div>
-              <div>
-                <span className="text-sm text-gray-500 block mb-1">Người thực hiện</span>
-                <div className="flex items-center gap-2 font-medium text-gray-900">
-                  <UserCircle2 size={16} className="text-gray-400" />
-                  {task.assigneeName || 'Chưa phân công'}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="glass rounded-xl p-6 border border-gray-100">
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
-              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-                <Clock size={18} className="text-blue-600" />
-                Tiến độ thực hiện
-              </h3>
-              <div className="flex flex-wrap gap-2">
-                {canChangeStatus && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setStatusData({ status: task.status });
-                      setIsStatusModalOpen(true);
-                    }}
-                    className="px-3 py-1.5 text-sm font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
-                  >
-                    Đổi trạng thái
-                  </button>
-                )}
-                {canRequestExt && (
-                  <button
-                    type="button"
-                    onClick={() => setIsExtModalOpen(true)}
-                    className="px-3 py-1.5 text-sm font-medium bg-amber-50 text-amber-800 rounded-lg hover:bg-amber-100 inline-flex items-center gap-1"
-                  >
-                    <CalendarClock size={14} />
-                    Gia hạn
-                  </button>
-                )}
-                {canUpdateProgress && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setProgressData((p) => ({
-                        ...p,
-                        progress: snapProgressToLevel(task.progress),
-                      }));
-                      setIsProgressModalOpen(true);
-                    }}
-                    className="px-3 py-1.5 text-sm font-medium bg-primary-600 text-white rounded-lg hover:bg-primary-700"
-                  >
-                    Cập nhật tiến độ
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="mb-8">
-              <div className="flex justify-between text-sm mb-2 gap-2">
-                <span className="font-medium text-gray-700">Tiến độ</span>
-                <span className="font-bold text-primary-600">
-                  {getProgressLevelLabel(task.progress)}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Main: content → progress → history → meta extras */}
+        <div className="lg:col-span-2 space-y-3">
+          {/* Progress first when only updating progress */}
+          {!isCreate && task && mode === 'edit' && canUpdateProgress && !canEditMeta && (
+            <ExpandableSection
+              title="Tiến độ"
+              icon={<Clock size={16} />}
+              defaultOpen
+              compact
+              badge={
+                <span className="text-xs font-semibold text-primary-600 bg-primary-50 px-2 py-0.5 rounded-full">
+                  {getProgressLevelLabel(progressValue)}
                 </span>
+              }
+            >
+              <div className="space-y-3">
+                <FormField label="Mốc" required className="mb-0">
+                  <select
+                    value={snapProgressToLevel(progressValue)}
+                    onChange={(e) => {
+                      patchForm({
+                        ...formData,
+                        progress: Number(e.target.value) as ProgressLevelValue,
+                      });
+                    }}
+                    className={selectClass}
+                  >
+                    {PROGRESS_LEVELS.map((lv) => (
+                      <option key={lv.value} value={lv.value}>
+                        {lv.label}
+                      </option>
+                    ))}
+                  </select>
+                </FormField>
+                <FormField label="Nội dung" className="mb-0">
+                  <textarea
+                    value={progressNote}
+                    onChange={(e) => {
+                      setProgressNote(e.target.value);
+                      setDirty(true);
+                    }}
+                    className={textareaClass}
+                    rows={2}
+                    placeholder="Đã làm gì..."
+                  />
+                </FormField>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <FormField label="Khó khăn" className="mb-0">
+                    <textarea
+                      value={progressDifficulties}
+                      onChange={(e) => {
+                        setProgressDifficulties(e.target.value);
+                        setDirty(true);
+                      }}
+                      className={textareaClass}
+                      rows={2}
+                      placeholder="Nếu có"
+                    />
+                  </FormField>
+                  <FormField label="Đề xuất" className="mb-0">
+                    <textarea
+                      value={progressSuggestions}
+                      onChange={(e) => {
+                        setProgressSuggestions(e.target.value);
+                        setDirty(true);
+                      }}
+                      className={textareaClass}
+                      rows={2}
+                      placeholder="Nếu có"
+                    />
+                  </FormField>
+                </div>
+                <ProgressBar value={snapProgressToLevel(progressValue)} size="lg" labelMode="level" />
               </div>
-              <ProgressBar value={task.progress} size="lg" labelMode="level" />
-            </div>
+            </ExpandableSection>
+          )}
 
-            <div className="space-y-4">
-              {updates.map((update) => (
-                <div
-                  key={update.id}
-                  className="p-4 rounded-xl border border-gray-100 bg-white shadow-sm"
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <Avatar name={update.userName} src={update.userAvatar} size="sm" />
-                      <span className="font-medium text-sm text-gray-900">{update.userName}</span>
-                    </div>
-                    <span className="text-xs text-gray-500">
-                      {new Date(update.createdAt).toLocaleString('vi-VN')}
-                    </span>
+          {(mode === 'create' || canEditMeta || mode === 'view') && (
+            <TaskFormFields
+              value={formData}
+              onChange={patchForm}
+              departments={departments}
+              users={users}
+              taskCategories={taskCategories}
+              fields={fields}
+              readOnly={readOnly || (mode === 'edit' && !canEditMeta)}
+              metaReadOnly={mode === 'edit' && !canEditMeta}
+              showTitle={false}
+              showDescription
+              showProgressSelect={false}
+              extraDefaultOpen={false}
+              showExtra={canEditMeta || mode === 'view'}
+              showExpandToolbar={mode === 'create' || (mode === 'edit' && canEditMeta)}
+            />
+          )}
+
+          {/* Progress (view / full edit) */}
+          {!isCreate && task && !(mode === 'edit' && canUpdateProgress && !canEditMeta) && (
+            <ExpandableSection
+              title="Tiến độ"
+              icon={<Clock size={16} />}
+              defaultOpen
+              compact
+              summary={getProgressLevelLabel(progressValue)}
+              badge={
+                <span className="text-xs font-semibold text-primary-600 bg-primary-50 px-2 py-0.5 rounded-full">
+                  {getProgressLevelLabel(progressValue)}
+                </span>
+              }
+            >
+              {mode === 'edit' && canUpdateProgress ? (
+                <div className="space-y-3">
+                  <FormField label="Mốc" required className="mb-0">
+                    <select
+                      value={snapProgressToLevel(progressValue)}
+                      onChange={(e) => {
+                        patchForm({
+                          ...formData,
+                          progress: Number(e.target.value) as ProgressLevelValue,
+                        });
+                      }}
+                      className={selectClass}
+                    >
+                      {PROGRESS_LEVELS.map((lv) => (
+                        <option key={lv.value} value={lv.value}>
+                          {lv.label}
+                        </option>
+                      ))}
+                    </select>
+                  </FormField>
+                  <FormField label="Nội dung" className="mb-0">
+                    <textarea
+                      value={progressNote}
+                      onChange={(e) => {
+                        setProgressNote(e.target.value);
+                        setDirty(true);
+                      }}
+                      className={textareaClass}
+                      rows={2}
+                      placeholder="Đã làm gì..."
+                    />
+                  </FormField>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <FormField label="Khó khăn" className="mb-0">
+                      <textarea
+                        value={progressDifficulties}
+                        onChange={(e) => {
+                          setProgressDifficulties(e.target.value);
+                          setDirty(true);
+                        }}
+                        className={textareaClass}
+                        rows={2}
+                        placeholder="Nếu có"
+                      />
+                    </FormField>
+                    <FormField label="Đề xuất" className="mb-0">
+                      <textarea
+                        value={progressSuggestions}
+                        onChange={(e) => {
+                          setProgressSuggestions(e.target.value);
+                          setDirty(true);
+                        }}
+                        className={textareaClass}
+                        rows={2}
+                        placeholder="Nếu có"
+                      />
+                    </FormField>
                   </div>
-                  <span className="inline-block px-2 py-1 bg-blue-50 text-blue-700 text-xs font-medium rounded-md mb-2">
-                    Tiến độ: {getProgressLevelLabel(update.previousProgress)} →{' '}
-                    {getProgressLevelLabel(update.progress)}
-                  </span>
-                  <p className="text-sm text-gray-700">{update.content}</p>
-                  {update.difficulties && (
-                    <p className="text-sm text-red-600 mt-2 bg-red-50 p-2 rounded-lg">
-                      <strong>Khó khăn:</strong> {update.difficulties}
-                    </p>
-                  )}
-                  {update.suggestions && (
-                    <p className="text-sm text-emerald-700 mt-2 bg-emerald-50 p-2 rounded-lg">
-                      <strong>Đề xuất:</strong> {update.suggestions}
-                    </p>
-                  )}
+                  <ProgressBar value={snapProgressToLevel(progressValue)} size="lg" labelMode="level" />
                 </div>
-              ))}
-              {updates.length === 0 && (
-                <div className="text-center py-8 text-gray-500 bg-gray-50 rounded-xl">
-                  Chưa có cập nhật tiến độ nào.
-                </div>
+              ) : (
+                <ProgressBar value={task.progress} size="lg" labelMode="level" />
               )}
-            </div>
-          </div>
+            </ExpandableSection>
+          )}
 
-          {/* Extensions */}
-          {extensions.length > 0 && (
-            <div className="glass rounded-xl p-6 border border-gray-100">
-              <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                <CalendarClock size={18} className="text-amber-600" />
-                Yêu cầu gia hạn
-              </h3>
+          {!isCreate && task && (
+            <ExpandableSection
+              title="Lịch sử"
+              icon={<History size={16} />}
+              defaultOpen={mode === 'view'}
+              compact
+              summary={changeHistory.length ? `${changeHistory.length} mục` : 'Trống'}
+              badge={
+                changeHistory.length > 0 ? (
+                  <span className="text-xs font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">
+                    {changeHistory.length}
+                  </span>
+                ) : undefined
+              }
+            >
+              <DataTable
+                columns={historyColumns}
+                data={changeHistory}
+                size="middle"
+                emptyMessage="Chưa có thay đổi."
+              />
+            </ExpandableSection>
+          )}
+
+          {!isCreate && task && (
+            <ExpandableSection
+              title="Thông tin khác"
+              icon={<FileText size={16} />}
+              defaultOpen={false}
+              compact
+              summary={[
+                task.assigneeName || task.assignedDepartmentName,
+                coordinatingLabel(task.coordinatingDepartments) !== '—'
+                  ? `PH: ${coordinatingLabel(task.coordinatingDepartments)}`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            >
+              <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2.5 text-sm">
+                <div>
+                  <dt className="text-xs text-slate-500">Phòng / người làm</dt>
+                  <dd className="font-medium text-slate-900">
+                    {task.assignedDepartmentName || '—'}
+                    {task.assigneeName ? ` · ${task.assigneeName}` : ''}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-slate-500">Phối hợp</dt>
+                  <dd className="font-medium text-slate-900">
+                    {coordinatingLabel(task.coordinatingDepartments)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-slate-500">Người giao</dt>
+                  <dd className="font-medium text-slate-900">{task.assignerName || '—'}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-slate-500">ID / mã ngoài</dt>
+                  <dd className="font-medium text-slate-900 break-all">
+                    {task.id}
+                    {task.externalTaskId ? ` · ${task.externalTaskId}` : ''}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-slate-500">Cập nhật</dt>
+                  <dd className="font-medium text-slate-900">
+                    {task.updatedAt ? new Date(task.updatedAt).toLocaleString('vi-VN') : '—'}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-slate-500">Hoàn thành thực tế</dt>
+                  <dd className="font-medium text-slate-900">
+                    {task.completedDate
+                      ? new Date(task.completedDate).toLocaleDateString('vi-VN')
+                      : '—'}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-slate-500">Gia hạn (đã duyệt)</dt>
+                  <dd className="font-medium text-slate-900">
+                    {extCount}
+                    {lastExtPreviousDue
+                      ? ` · mốc cũ ${new Date(lastExtPreviousDue).toLocaleDateString('vi-VN')}`
+                      : ''}
+                  </dd>
+                </div>
+              </dl>
+            </ExpandableSection>
+          )}
+
+          {!isCreate && extensions.length > 0 && (
+            <ExpandableSection
+              title="Gia hạn"
+              icon={<CalendarClock size={16} />}
+              defaultOpen={false}
+              compact
+              summary={`${extensions.length} yêu cầu`}
+              badge={
+                <span className="text-xs font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
+                  {extensions.length}
+                </span>
+              }
+            >
               <div className="space-y-3">
                 {extensions.map((ext) => (
                   <div
                     key={ext.id}
-                    className="p-4 rounded-xl border border-gray-100 bg-white text-sm space-y-2"
+                    className="p-3 rounded-xl border border-gray-100 bg-white text-sm space-y-2"
                   >
                     <div className="flex flex-wrap justify-between gap-2">
                       <span className="font-medium text-gray-900">{ext.requesterName}</span>
@@ -391,219 +923,176 @@ export default function TaskDetail() {
                   </div>
                 ))}
               </div>
-            </div>
+            </ExpandableSection>
           )}
         </div>
 
-        <div className="space-y-6">
-          <div className="glass rounded-xl p-6 border border-gray-100 h-[600px] flex flex-col">
-            <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
-              <MessageSquare size={18} className="text-primary-600" />
-              Trao đổi & Bình luận
-            </h3>
-
-            <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
-              {comments.map((comment) => (
-                <div key={comment.id} className="flex gap-3">
-                  <Avatar name={comment.userName} src={comment.userAvatar} size="sm" />
-                  <div className="flex-1">
-                    <div className="bg-gray-50 p-3 rounded-2xl rounded-tl-none border border-gray-100">
-                      <div className="flex items-center justify-between mb-1 gap-2">
-                        <span className="text-sm font-semibold text-gray-900">
-                          {comment.userName}
-                        </span>
-                        <span className="text-xs text-gray-500 shrink-0">
-                          {new Date(comment.createdAt).toLocaleString('vi-VN')}
-                        </span>
+        {/* Chat — sticky sidebar */}
+        <div className="lg:sticky lg:top-20 self-start">
+          <ExpandableSection
+            title="Trao đổi"
+            icon={<MessageSquare size={16} />}
+            defaultOpen
+            compact
+            summary={
+              isCreate
+                ? 'Sau khi giao'
+                : comments.length
+                  ? `${comments.length} tin`
+                  : 'Trống'
+            }
+            badge={
+              !isCreate && comments.length > 0 ? (
+                <span className="text-xs font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">
+                  {comments.length}
+                </span>
+              ) : undefined
+            }
+          >
+            {isCreate ? (
+              <p className="text-sm text-gray-500 text-center py-4">Giao việc xong mới chat được.</p>
+            ) : (
+              <div className="flex flex-col min-h-[220px] max-h-[min(480px,calc(100vh-9rem))]">
+                <div className="flex-1 overflow-y-auto space-y-3 pr-1 min-h-0">
+                  {comments.map((comment) => (
+                    <div key={comment.id} className="flex gap-2">
+                      <Avatar name={comment.userName} src={comment.userAvatar} size="sm" />
+                      <div className="flex-1 min-w-0">
+                        <div className="bg-gray-50 p-2.5 rounded-2xl rounded-tl-none border border-gray-100">
+                          <div className="flex items-center justify-between mb-0.5 gap-2">
+                            <span className="text-sm font-semibold text-gray-900 truncate">
+                              {comment.userName}
+                            </span>
+                            <span className="text-[11px] text-gray-500 shrink-0">
+                              {new Date(comment.createdAt).toLocaleString('vi-VN')}
+                            </span>
+                          </div>
+                          <p className="text-sm text-gray-700 whitespace-pre-wrap">{comment.content}</p>
+                        </div>
                       </div>
-                      <p className="text-sm text-gray-700 whitespace-pre-wrap">{comment.content}</p>
                     </div>
-                  </div>
+                  ))}
+                  {comments.length === 0 && (
+                    <p className="text-center py-3 text-sm text-gray-500">Chưa có tin nhắn.</p>
+                  )}
                 </div>
-              ))}
-              {comments.length === 0 && (
-                <div className="text-center py-4 text-gray-500 text-sm">Chưa có bình luận nào.</div>
-              )}
-            </div>
-
-            <form onSubmit={handleAddComment} className="mt-4 pt-4 border-t border-gray-100 relative">
-              <input
-                type="text"
-                value={commentText}
-                onChange={(e) => setCommentText(e.target.value)}
-                placeholder="Nhập nội dung trao đổi..."
-                className="w-full pr-12 pl-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
-              />
-              <button
-                type="submit"
-                disabled={!commentText.trim()}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-primary-600 hover:bg-primary-50 rounded-lg disabled:opacity-50"
-              >
-                <Send size={18} />
-              </button>
-            </form>
-          </div>
+                <form
+                  onSubmit={handleAddComment}
+                  className="mt-3 pt-3 border-t border-gray-100 relative shrink-0"
+                >
+                  <input
+                    type="text"
+                    value={commentText}
+                    onChange={(e) => setCommentText(e.target.value)}
+                    placeholder="Viết tin..."
+                    className="w-full pr-11 pl-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!commentText.trim()}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 p-2 text-primary-600 hover:bg-primary-50 rounded-lg disabled:opacity-50"
+                  >
+                    <Send size={16} />
+                  </button>
+                </form>
+              </div>
+            )}
+          </ExpandableSection>
         </div>
       </div>
 
-      <Modal
-        isOpen={isProgressModalOpen}
-        onClose={() => setIsProgressModalOpen(false)}
-        title="Cập nhật tiến độ"
-      >
-        <form onSubmit={handleUpdateProgress} className="space-y-4">
-          <FormField label="Tiến độ" required>
-            <select
-              value={snapProgressToLevel(progressData.progress)}
-              onChange={(e) =>
-                setProgressData({
-                  ...progressData,
-                  progress: Number(e.target.value) as ProgressLevelValue,
-                })
-              }
-              className={selectClass}
-              required
-            >
-              {PROGRESS_LEVELS.map((lv) => (
-                <option key={lv.value} value={lv.value}>
-                  {lv.label}
-                </option>
-              ))}
-            </select>
-          </FormField>
-          <FormField label="Đã làm gì" required>
-            <textarea
-              value={progressData.content}
-              onChange={(e) => setProgressData({ ...progressData, content: e.target.value })}
-              className={textareaClass}
-              rows={3}
-              required
-              placeholder="Tóm tắt việc đã làm..."
-            />
-          </FormField>
-          <FormField label="Khó khăn">
-            <textarea
-              value={progressData.difficulties}
-              onChange={(e) => setProgressData({ ...progressData, difficulties: e.target.value })}
-              className={textareaClass}
-              rows={2}
-              placeholder="Nếu có"
-            />
-          </FormField>
-          <FormField label="Đề xuất">
-            <textarea
-              value={progressData.suggestions}
-              onChange={(e) => setProgressData({ ...progressData, suggestions: e.target.value })}
-              className={textareaClass}
-              rows={2}
-              placeholder="Nếu có"
-            />
-          </FormField>
-          <div className="flex justify-end gap-3 pt-4">
-            <button
-              type="button"
-              onClick={() => setIsProgressModalOpen(false)}
-              className="px-4 py-2 text-sm font-semibold text-gray-700 bg-gray-100 rounded-lg"
-            >
-              Hủy
-            </button>
-            <button
-              type="submit"
-              className="px-4 py-2 text-sm font-semibold text-white bg-primary-600 rounded-lg"
-            >
-              Cập nhật
-            </button>
-          </div>
-        </form>
-      </Modal>
+      {/* Modals — status / extension only (tiến độ trên màn Sửa) */}
+      {task && (
+        <>
+          <Modal
+            isOpen={isStatusModalOpen}
+            onClose={() => setIsStatusModalOpen(false)}
+            title="Thay đổi trạng thái"
+          >
+            <form onSubmit={handleUpdateStatus} className="space-y-4">
+              <FormField label="Chuyển sang trạng thái" required>
+                <select
+                  value={statusData.status}
+                  onChange={(e) => setStatusData({ status: e.target.value as TaskStatus })}
+                  className={selectClass}
+                >
+                  {(Object.keys(TASK_STATUS_LABELS) as TaskStatus[]).map((s) => (
+                    <option key={s} value={s}>
+                      {TASK_STATUS_LABELS[s]}
+                    </option>
+                  ))}
+                </select>
+              </FormField>
+              <div className="flex justify-end gap-3 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setIsStatusModalOpen(false)}
+                  className="px-4 py-2 text-sm font-semibold text-gray-700 bg-gray-100 rounded-lg"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 text-sm font-semibold text-white bg-primary-600 rounded-lg"
+                >
+                  Lưu thay đổi
+                </button>
+              </div>
+            </form>
+          </Modal>
 
-      <Modal
-        isOpen={isStatusModalOpen}
-        onClose={() => setIsStatusModalOpen(false)}
-        title="Thay đổi trạng thái"
-      >
-        <form onSubmit={handleUpdateStatus} className="space-y-4">
-          <FormField label="Chuyển sang trạng thái" required>
-            <select
-              value={statusData.status}
-              onChange={(e) => setStatusData({ status: e.target.value as TaskStatus })}
-              className={selectClass}
-            >
-              {(Object.keys(TASK_STATUS_LABELS) as TaskStatus[]).map((s) => (
-                <option key={s} value={s}>
-                  {TASK_STATUS_LABELS[s]}
-                </option>
-              ))}
-            </select>
-          </FormField>
-          <div className="flex justify-end gap-3 pt-4">
-            <button
-              type="button"
-              onClick={() => setIsStatusModalOpen(false)}
-              className="px-4 py-2 text-sm font-semibold text-gray-700 bg-gray-100 rounded-lg"
-            >
-              Hủy
-            </button>
-            <button
-              type="submit"
-              className="px-4 py-2 text-sm font-semibold text-white bg-primary-600 rounded-lg"
-            >
-              Lưu thay đổi
-            </button>
-          </div>
-        </form>
-      </Modal>
-
-      <Modal
-        isOpen={isExtModalOpen}
-        onClose={() => setIsExtModalOpen(false)}
-        title="Yêu cầu gia hạn"
-        size="sm"
-      >
-        <form onSubmit={handleExtension} className="space-y-4">
-          <p className="text-sm text-gray-500">
-            Hạn hiện tại:{' '}
-            <strong>
-              {task.dueDate ? new Date(task.dueDate).toLocaleDateString('vi-VN') : '—'}
-            </strong>
-          </p>
-          <FormField label="Xin gia hạn đến" required>
-            <input
-              type="date"
-              value={extData.requestedDueDate}
-              onChange={(e) => setExtData({ ...extData, requestedDueDate: e.target.value })}
-              className={inputClass}
-              required
-              min={task.dueDate}
-            />
-          </FormField>
-          <FormField label="Lý do" required>
-            <textarea
-              value={extData.reason}
-              onChange={(e) => setExtData({ ...extData, reason: e.target.value })}
-              className={textareaClass}
-              rows={3}
-              required
-              placeholder="Vì sao cần thêm thời gian?"
-            />
-          </FormField>
-          <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={() => setIsExtModalOpen(false)}
-              className="px-4 py-2 text-sm font-semibold text-gray-700 bg-gray-100 rounded-lg"
-            >
-              Hủy
-            </button>
-            <button
-              type="submit"
-              className="px-4 py-2 text-sm font-semibold text-white bg-primary-600 rounded-lg"
-            >
-              Gửi yêu cầu
-            </button>
-          </div>
-        </form>
-      </Modal>
+          <Modal
+            isOpen={isExtModalOpen}
+            onClose={() => setIsExtModalOpen(false)}
+            title="Yêu cầu gia hạn"
+            size="sm"
+          >
+            <form onSubmit={handleExtension} className="space-y-4">
+              <p className="text-sm text-gray-500">
+                Hạn hiện tại:{' '}
+                <strong>
+                  {task.dueDate ? new Date(task.dueDate).toLocaleDateString('vi-VN') : '—'}
+                </strong>
+              </p>
+              <FormField label="Xin gia hạn đến" required>
+                <input
+                  type="date"
+                  value={extData.requestedDueDate}
+                  onChange={(e) => setExtData({ ...extData, requestedDueDate: e.target.value })}
+                  className={inputClass}
+                  required
+                  min={task.dueDate}
+                />
+              </FormField>
+              <FormField label="Lý do" required>
+                <textarea
+                  value={extData.reason}
+                  onChange={(e) => setExtData({ ...extData, reason: e.target.value })}
+                  className={textareaClass}
+                  rows={3}
+                  required
+                  placeholder="Vì sao cần thêm thời gian?"
+                />
+              </FormField>
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsExtModalOpen(false)}
+                  className="px-4 py-2 text-sm font-semibold text-gray-700 bg-gray-100 rounded-lg"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 text-sm font-semibold text-white bg-primary-600 rounded-lg"
+                >
+                  Gửi yêu cầu
+                </button>
+              </div>
+            </form>
+          </Modal>
+        </>
+      )}
     </div>
   );
 }

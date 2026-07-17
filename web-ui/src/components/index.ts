@@ -18,3 +18,7 @@ export { default as FormField, inputClass, selectClass, textareaClass } from './
 export { default as ConfirmDialog } from './ConfirmDialog';
 export { default as BulkImportExcelModal } from './BulkImportExcelModal';
 export { default as HbeeLogo } from './HbeeLogo';
+export { default as TaskFormFields } from './TaskFormFields';
+export type { TaskFormFieldsProps, TaskFormSectionKey } from './TaskFormFields';
+export { default as ExpandableSection } from './ExpandableSection';
+export type { ExpandableSectionProps } from './ExpandableSection';

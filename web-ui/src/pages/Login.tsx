@@ -10,6 +10,8 @@ import {
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import {
+  clearAllPasswordOverrides,
+  clearUserPasswordOverride,
   DEMO_PASSWORD,
   isRememberEnabled,
   loadRememberedEmail,
@@ -18,19 +20,20 @@ import { organization } from '../data/mockData';
 import { HbeeLogo, Modal } from '../components';
 import AppFooter from '../components/AppFooter';
 
+/** Tài khoản demo — luôn khớp mockData, mật khẩu mặc định DEMO_PASSWORD. */
 const DEMO_ACCOUNTS = [
-  { email: 'nguyenvanan@hoabinh.gov.vn', label: 'Chủ tịch' },
-  { email: 'phamminhtuan@hoabinh.gov.vn', label: 'Văn thư' },
-  { email: 'lehoangphuc@hoabinh.gov.vn', label: 'Chánh VP' },
-  { email: 'doanhkiet@hoabinh.gov.vn', label: 'Admin' },
-];
+  { email: 'nguyenvanan@hoabinh.gov.vn', label: 'Chủ tịch', hint: 'Nguyễn Văn An' },
+  { email: 'phamminhtuan@hoabinh.gov.vn', label: 'Văn thư', hint: 'Phạm Minh Tuấn' },
+  { email: 'lehoangphuc@hoabinh.gov.vn', label: 'Chánh VP', hint: 'Lê Hoàng Phúc' },
+  { email: 'doanhkiet@hoabinh.gov.vn', label: 'Admin', hint: 'Đỗ Anh Kiệt' },
+] as const;
 
 type HelpModal = null | 'forgot' | 'register';
 
 const HELP_COPY: Record<Exclude<HelpModal, null>, { title: string; body: string }> = {
   forgot: {
     title: 'Quên mật khẩu',
-    body: 'Liên hệ quản trị viên để được cấp lại mật khẩu.',
+    body: `Bản demo: mật khẩu mặc định là ${DEMO_PASSWORD}. Bấm tài khoản demo trên form để đăng nhập ngay, hoặc «Khôi phục MK demo» nếu đã đổi mật khẩu trước đó. Khi có backend: liên hệ quản trị viên.`,
   },
   register: {
     title: 'Chưa có tài khoản',
@@ -42,6 +45,7 @@ export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
   const currentUser = useStore((s) => s.currentUser);
+  const users = useStore((s) => s.users);
   const login = useStore((s) => s.login);
 
   const [email, setEmail] = useState(() => loadRememberedEmail());
@@ -51,7 +55,8 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [helpModal, setHelpModal] = useState<HelpModal>(null);
-  const [demoOpen, setDemoOpen] = useState(false);
+  /** Mở sẵn để user dev thấy ngay tài khoản demo. */
+  const [demoOpen, setDemoOpen] = useState(true);
 
   const from =
     (location.state as { from?: string } | null)?.from &&
@@ -67,19 +72,58 @@ export default function Login() {
     e.preventDefault();
     setError('');
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 350));
+    await new Promise((r) => setTimeout(r, 200));
     const result = login(email, password, remember);
     setLoading(false);
     if (!result.ok) {
-      setError(result.error || 'Đăng nhập thất bại');
+      setError(
+        `${result.error || 'Đăng nhập thất bại'}. Demo: mật khẩu ${DEMO_PASSWORD} (hoặc bấm tài khoản bên dưới để vào ngay).`,
+      );
       return;
     }
     navigate(from, { replace: true });
   };
 
+  /** Điền form + khôi phục mật khẩu demo cho user đó. */
   const fillDemo = (demoEmail: string) => {
+    const user = users.find((u) => u.email.toLowerCase() === demoEmail.toLowerCase());
+    if (user) clearUserPasswordOverride(user.id);
     setEmail(demoEmail);
     setPassword(DEMO_PASSWORD);
+    setShowPassword(true);
+    setError('');
+  };
+
+  /** Một chạm: reset MK demo → đăng nhập ngay. */
+  const loginAsDemo = async (demoEmail: string) => {
+    const user = users.find((u) => u.email.toLowerCase() === demoEmail.toLowerCase());
+    if (!user) {
+      setError(`Không tìm thấy tài khoản demo: ${demoEmail}`);
+      return;
+    }
+    if (!user.isActive) {
+      setError('Tài khoản demo đang bị khóa.');
+      return;
+    }
+    clearUserPasswordOverride(user.id);
+    setEmail(demoEmail);
+    setPassword(DEMO_PASSWORD);
+    setError('');
+    setLoading(true);
+    await new Promise((r) => setTimeout(r, 150));
+    const result = login(demoEmail, DEMO_PASSWORD, false);
+    setLoading(false);
+    if (!result.ok) {
+      setError(result.error || 'Đăng nhập demo thất bại');
+      return;
+    }
+    navigate(from, { replace: true });
+  };
+
+  const restoreAllDemoPasswords = () => {
+    clearAllPasswordOverrides();
+    setPassword(DEMO_PASSWORD);
+    setShowPassword(true);
     setError('');
   };
 
@@ -278,7 +322,7 @@ export default function Login() {
               )}
             </Modal>
 
-            {/* Demo accounts — collapsible, secondary */}
+            {/* Demo accounts — mở sẵn, 1 chạm đăng nhập */}
             <div className="mt-7 pt-5 border-t border-gray-100">
               <button
                 type="button"
@@ -286,30 +330,56 @@ export default function Login() {
                 className="w-full flex items-center justify-between text-xs font-medium text-gray-500 hover:text-gray-700 transition-colors"
                 aria-expanded={demoOpen}
               >
-                <span>Tài khoản dùng thử (dev)</span>
+                <span>Tài khoản demo (bấm để đăng nhập ngay)</span>
                 <ChevronDown
                   size={16}
                   className={`transition-transform ${demoOpen ? 'rotate-180' : ''}`}
                 />
               </button>
               {demoOpen && (
-                <div className="mt-3 space-y-2">
-                  <p className="text-[11px] text-gray-400">
-                    Mật khẩu demo: <code className="text-primary-700 font-medium">{DEMO_PASSWORD}</code>
-                  </p>
+                <div className="mt-3 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-gray-500">
+                    <p>
+                      Mật khẩu mặc định:{' '}
+                      <code className="text-primary-700 font-semibold bg-primary-50 px-1.5 py-0.5 rounded">
+                        {DEMO_PASSWORD}
+                      </code>
+                    </p>
+                    <button
+                      type="button"
+                      onClick={restoreAllDemoPasswords}
+                      className="text-primary-600 hover:text-primary-700 font-medium underline underline-offset-2"
+                    >
+                      Khôi phục MK demo
+                    </button>
+                  </div>
                   <div className="grid grid-cols-2 gap-2">
                     {DEMO_ACCOUNTS.map((acc) => (
                       <button
                         key={acc.email}
                         type="button"
-                        onClick={() => fillDemo(acc.email)}
-                        className="text-left text-xs px-3 py-2 rounded-lg border border-gray-200 hover:border-primary-300 hover:bg-primary-50 transition-colors"
+                        disabled={loading}
+                        onClick={() => void loginAsDemo(acc.email)}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          fillDemo(acc.email);
+                        }}
+                        title="Bấm: đăng nhập ngay · Chuột phải: chỉ điền form"
+                        className="text-left text-xs px-3 py-2.5 rounded-lg border border-gray-200 hover:border-primary-300 hover:bg-primary-50 transition-colors disabled:opacity-50"
                       >
                         <span className="font-semibold text-gray-800 block">{acc.label}</span>
-                        <span className="text-gray-500 truncate block">{acc.email}</span>
+                        <span className="text-gray-500 truncate block text-[10px] leading-snug">
+                          {acc.hint}
+                        </span>
+                        <span className="text-primary-600/80 truncate block text-[10px] mt-0.5">
+                          {acc.email}
+                        </span>
                       </button>
                     ))}
                   </div>
+                  <p className="text-[10px] text-gray-400 leading-relaxed">
+                    URL đúng: <code className="text-gray-600">http://localhost:5173/#/login</code>
+                  </p>
                 </div>
               )}
             </div>

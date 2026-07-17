@@ -33,7 +33,7 @@ import {
   verifyUserPassword,
   type ChangePasswordError,
 } from '../auth/session';
-import { hasPermission } from '../utils/permissions';
+import { canApproveTaskResult, hasPermission } from '../utils/permissions';
 
 // ─── Helpers ───────────────────────────────────────────────
 let counter = Date.now();
@@ -201,11 +201,12 @@ export const useStore = create<AppState>((set, get) => {
 
   login: (email, password, remember = false) => {
     const normalized = email.trim().toLowerCase();
-    if (!normalized || !password) {
+    const pwd = password.trim();
+    if (!normalized || !pwd) {
       return { ok: false, error: 'Vui lòng nhập email và mật khẩu' };
     }
     const user = get().users.find((u) => u.email.toLowerCase() === normalized);
-    if (!user || !verifyUserPassword(user.id, password)) {
+    if (!user || !verifyUserPassword(user.id, pwd)) {
       return { ok: false, error: 'Email hoặc mật khẩu không đúng' };
     }
     if (!user.isActive) {
@@ -408,7 +409,8 @@ export const useStore = create<AppState>((set, get) => {
     ) {
       return false;
     }
-    if (!get().tasks.some((t) => t.id === id)) return false;
+    const existing = get().tasks.find((t) => t.id === id);
+    if (!existing) return false;
 
     const patch: Partial<Task> = { updatedAt: now() };
     if (data.title !== undefined) patch.title = data.title;
@@ -467,9 +469,44 @@ export const useStore = create<AppState>((set, get) => {
     if (data.approverEmail !== undefined) patch.approverEmail = data.approverEmail;
     if (data.approverPhone !== undefined) patch.approverPhone = data.approverPhone;
 
+    // Lazy import avoid circular — inline short summary
+    const changeBits: string[] = [];
+    const fieldLabels: [keyof typeof patch, string][] = [
+      ['title', 'Tên việc'],
+      ['description', 'Mô tả'],
+      ['urgency', 'Mức khẩn'],
+      ['dueDate', 'Hạn'],
+      ['startDate', 'Ngày BĐ'],
+      ['assignedDepartmentName', 'Phòng'],
+      ['assigneeName', 'Người làm'],
+      ['categoryName', 'Loại'],
+      ['fieldName', 'Lĩnh vực'],
+      ['chairLeaderName', 'LĐ chủ trì'],
+      ['focalPointText', 'Đầu mối'],
+      ['executionResult', 'Kết quả'],
+      ['roadmap', 'Lộ trình'],
+      ['externalTaskId', 'Mã ngoài'],
+      ['approverName', 'Người duyệt'],
+      ['sourceCitation', 'Nguồn'],
+    ];
+    for (const [k, label] of fieldLabels) {
+      if (patch[k] === undefined) continue;
+      const ov = existing[k as keyof typeof existing];
+      const nv = patch[k];
+      if (String(ov ?? '') === String(nv ?? '')) continue;
+      changeBits.push(`${label}: ${ov || '—'} → ${nv || '—'}`);
+    }
+    if (patch.coordinatingDepartments !== undefined) {
+      changeBits.push('Đơn vị phối hợp: cập nhật');
+    }
+    if (patch.progress !== undefined && patch.progress !== existing.progress) {
+      changeBits.push(`Tiến độ: ${existing.progress}% → ${patch.progress}%`);
+    }
+    const auditMsg = changeBits.length ? changeBits.join('; ') : 'Cập nhật nhiệm vụ';
+
     set(s => ({
       tasks: s.tasks.map(t => t.id === id ? { ...t, ...patch } : t),
-      auditLogs: [createAuditEntry('UPDATE', 'Task', id, `Cập nhật nhiệm vụ`), ...s.auditLogs],
+      auditLogs: [createAuditEntry('UPDATE', 'Task', id, auditMsg), ...s.auditLogs],
     }));
     get().recalcKPI();
     return true;
@@ -500,28 +537,51 @@ export const useStore = create<AppState>((set, get) => {
 
   changeTaskStatus: (id, status) => {
     const { currentUser, roles } = get();
-    const task = get().tasks.find(t => t.id === id);
+    const task = get().tasks.find((t) => t.id === id);
     if (!task) return false;
-    const canUpdate =
-      hasPermission(currentUser, roles, 'task.update') ||
-      hasPermission(currentUser, roles, 'task.accept') ||
-      hasPermission(currentUser, roles, 'task.approve') ||
-      hasPermission(currentUser, roles, 'task.assign') ||
-      task.assigneeId === currentUser?.id ||
-      task.assignerId === currentUser?.id;
-    if (!canUpdate) return false;
+
+    // Phê duyệt kết quả: chỉ role có task.approve + đúng phạm vi
+    if (task.status === 'WAITING_APPROVAL' && status === 'COMPLETED') {
+      if (!canApproveTaskResult(currentUser, roles, task)) return false;
+    } else {
+      const canUpdate =
+        hasPermission(currentUser, roles, 'task.update') ||
+        hasPermission(currentUser, roles, 'task.accept') ||
+        hasPermission(currentUser, roles, 'task.approve') ||
+        hasPermission(currentUser, roles, 'task.assign') ||
+        task.assigneeId === currentUser?.id ||
+        task.assignerId === currentUser?.id;
+      if (!canUpdate) return false;
+    }
 
     const updates: Partial<Task> = { status, updatedAt: now() };
-    if (status === 'COMPLETED') updates.completedDate = now();
-    set(s => ({
-      tasks: s.tasks.map(t => t.id === id ? { ...t, ...updates } : t),
-      auditLogs: [createAuditEntry('STATUS_CHANGE', 'Task', id, `${task.status} → ${status}`), ...s.auditLogs],
+    if (status === 'COMPLETED') {
+      updates.completedDate = now().split('T')[0];
+      updates.progress = 100;
+      // Snapshot người duyệt nếu chưa có
+      if (currentUser && !task.approverUserId) {
+        updates.approverUserId = currentUser.id;
+        updates.approverName = currentUser.fullName;
+        updates.approverEmail = currentUser.email;
+        updates.approverPhone = currentUser.phone;
+      }
+    }
+    set((s) => ({
+      tasks: s.tasks.map((t) => (t.id === id ? { ...t, ...updates } : t)),
+      auditLogs: [
+        createAuditEntry('STATUS_CHANGE', 'Task', id, `${task.status} → ${status}`),
+        ...s.auditLogs,
+      ],
       notifications: [
         createNotification(
-          status === 'COMPLETED' ? 'TASK_COMPLETED' : status === 'ASSIGNED' ? 'TASK_ASSIGNED' : 'PROGRESS_UPDATE',
+          status === 'COMPLETED'
+            ? 'TASK_COMPLETED'
+            : status === 'ASSIGNED'
+              ? 'TASK_ASSIGNED'
+              : 'PROGRESS_UPDATE',
           `Nhiệm vụ: ${task.title}`,
           `Trạng thái chuyển sang: ${status}`,
-          `/tasks/${id}`
+          `/tasks/${id}`,
         ),
         ...s.notifications,
       ],

@@ -10,6 +10,7 @@ import {
   Trash2,
   Check,
   Eye,
+  BadgeCheck,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import {
@@ -19,60 +20,22 @@ import {
   DataTable,
   FilterBar,
   filterSelectClass,
-  Modal,
-  FormField,
-  inputClass,
-  selectClass,
-  textareaClass,
   ConfirmDialog,
   Pagination,
 } from '../components';
-import type { Task, TaskStatus, UrgencyLevel } from '../types';
-import { hasPermission } from '../utils/permissions';
+import type { Task } from '../types';
 import {
-  DOCUMENT_SOURCE_KIND_LABELS,
-  PAGE_COPY,
-  TASK_STATUS_FILTER_OPTIONS,
-  TASK_STATUS_LABELS,
-  URGENCY_LABELS,
-} from '../utils/ui-labels';
+  canApproveTaskResult,
+  canEditTaskMeta,
+  canUpdateTaskProgress,
+  hasPermission,
+} from '../utils/permissions';
+import { PAGE_COPY, TASK_STATUS_FILTER_OPTIONS, TASK_STATUS_LABELS } from '../utils/ui-labels';
 import { sortRows, toggleSort, type SortState } from '../utils/table-sort';
 import { useClientPagination } from '../hooks/use-client-pagination';
-import type { DocumentSourceKind } from '../types';
-import {
-  PROGRESS_LEVELS,
-  snapProgressToLevel,
-  type ProgressLevelValue,
-} from '../utils/progress-levels';
 
 type TaskTab = 'assigned-by-me' | 'assigned-to-me' | 'all';
 type DeadlineFilter = 'all' | 'near' | 'overdue';
-
-const emptyForm = (): Partial<Task> => ({
-  title: '',
-  description: '',
-  scope: 'DEPARTMENT',
-  urgency: 'THUONG',
-  priority: 'MEDIUM',
-  assignedDepartmentId: '',
-  assigneeId: '',
-  categoryId: '',
-  fieldId: '',
-  dueDate: '',
-  startDate: '',
-  progress: 0,
-  chairLeaderName: '',
-  focalPointText: '',
-  sourceKind: null,
-  sourceCitation: '',
-  executionResult: '',
-  roadmap: '',
-  externalTaskId: '',
-  approverUserId: null,
-  approverName: '',
-  approverEmail: '',
-  approverPhone: '',
-});
 
 function daysUntil(due: string) {
   return (new Date(due).getTime() - Date.now()) / 86400000;
@@ -81,31 +44,21 @@ function daysUntil(due: string) {
 export default function Tasks() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const {
-    tasks,
-    departments,
-    users,
-    taskCategories,
-    fields,
-    currentUser,
-    roles,
-    addTask,
-    updateTask,
-    deleteTask,
-  } = useStore();
+  const { tasks, departments, currentUser, roles, deleteTask, changeTaskStatus } = useStore();
 
   const canCreate =
     hasPermission(currentUser, roles, 'task.create') ||
     hasPermission(currentUser, roles, 'task.assign');
-  const canEdit =
-    canCreate ||
-    hasPermission(currentUser, roles, 'task.update') ||
-    hasPermission(currentUser, roles, 'task.assign');
+  /** Sửa meta hoặc cập nhật tiến độ trên từng dòng */
+  const canOpenTaskWorkspace = (task: Task) =>
+    canEditTaskMeta(currentUser, roles, task) ||
+    canUpdateTaskProgress(currentUser, roles, task);
   const canDelete =
     hasPermission(currentUser, roles, 'task.cancel') ||
     hasPermission(currentUser, roles, 'task.assign') ||
     currentUser?.role === 'ADMIN' ||
     currentUser?.role === 'CHAIRMAN';
+  const hasApprovePerm = hasPermission(currentUser, roles, 'task.approve');
 
   const tabParam = searchParams.get('tab');
   const tab: TaskTab =
@@ -119,9 +72,6 @@ export default function Tasks() {
   const [deadlineFilter, setDeadlineFilter] = useState<DeadlineFilter>('all');
   const [sort, setSort] = useState<SortState>({ key: 'createdAt', direction: 'desc' });
 
-  const [formOpen, setFormOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [formData, setFormData] = useState<Partial<Task>>(emptyForm());
   const [deleteTarget, setDeleteTarget] = useState<Task | null>(null);
   const [toast, setToast] = useState<{ message: string; variant: 'ok' | 'err' } | null>(null);
 
@@ -217,90 +167,13 @@ export default function Tasks() {
 
   const openCreate = () => {
     if (!canCreate) return;
-    setEditingId(null);
-    setFormData(emptyForm());
-    setFormOpen(true);
+    navigate('/tasks/new');
   };
 
   const openEdit = (task: Task, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    if (!canEdit) return;
-    setEditingId(task.id);
-    setFormData({
-      title: task.title,
-      description: task.description,
-      urgency: task.urgency,
-      priority: task.priority,
-      assignedDepartmentId: task.assignedDepartmentId,
-      assigneeId: task.assigneeId,
-      categoryId: task.categoryId,
-      fieldId: task.fieldId,
-      dueDate: task.dueDate,
-      startDate: task.startDate,
-      progress: snapProgressToLevel(task.progress),
-      scope: task.scope,
-      chairLeaderName: task.chairLeaderName || '',
-      chairLeaderUserId: task.chairLeaderUserId || null,
-      focalPointText: task.focalPointText || '',
-      sourceKind: task.sourceKind ?? null,
-      sourceCitation: task.sourceCitation || '',
-      executionResult: task.executionResult || '',
-      roadmap: task.roadmap || '',
-      externalTaskId: task.externalTaskId || '',
-      approverUserId: task.approverUserId || null,
-      approverName: task.approverName || '',
-      approverEmail: task.approverEmail || '',
-      approverPhone: task.approverPhone || '',
-    });
-    setFormOpen(true);
-  };
-
-  const setApproverFromUserId = (userId: string) => {
-    if (!userId) {
-      setFormData((prev) => ({
-        ...prev,
-        approverUserId: null,
-        approverName: '',
-        approverEmail: '',
-        approverPhone: '',
-      }));
-      return;
-    }
-    const u = users.find((x) => x.id === userId);
-    setFormData((prev) => ({
-      ...prev,
-      approverUserId: u?.id || null,
-      approverName: u?.fullName || '',
-      approverEmail: u?.email || '',
-      approverPhone: u?.phone || '',
-    }));
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.title || !formData.assignedDepartmentId || !formData.categoryId || !formData.dueDate) {
-      showToast('Nhập đủ các mục bắt buộc', 'err');
-      return;
-    }
-
-    if (editingId) {
-      const ok = updateTask(editingId, formData);
-      if (!ok) {
-        showToast('Không sửa được — kiểm tra quyền', 'err');
-        return;
-      }
-      showToast('Đã lưu');
-    } else {
-      const created = addTask({ ...formData, status: 'ASSIGNED' });
-      if (!created) {
-        showToast('Không có quyền giao việc', 'err');
-        return;
-      }
-      showToast('Đã giao việc');
-    }
-    setFormOpen(false);
-    setEditingId(null);
-    setFormData(emptyForm());
+    if (!canOpenTaskWorkspace(task)) return;
+    navigate(`/tasks/${task.id}?edit=1`);
   };
 
   const handleDelete = () => {
@@ -312,6 +185,19 @@ export default function Tasks() {
       return;
     }
     showToast('Đã xóa nhiệm vụ');
+  };
+
+  const handleQuickApprove = (row: Task) => {
+    if (!canApproveTaskResult(currentUser, roles, row)) {
+      showToast('Không có quyền phê duyệt việc này', 'err');
+      return;
+    }
+    const ok = changeTaskStatus(row.id, 'COMPLETED');
+    if (!ok) {
+      showToast('Phê duyệt thất bại', 'err');
+      return;
+    }
+    showToast('Đã phê duyệt — hoàn thành');
   };
 
   const columns = [
@@ -381,41 +267,61 @@ export default function Tasks() {
       key: 'actions',
       title: 'Thao tác',
       align: 'right' as const,
-      render: (row: Task) => (
-        <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-          <button
-            type="button"
-            onClick={() => navigate(`/tasks/${row.id}`)}
-            className="p-1.5 text-gray-400 hover:text-primary-600 rounded-md hover:bg-primary-50"
-            title="Xem"
+      render: (row: Task) => {
+        const showApprove =
+          hasApprovePerm && canApproveTaskResult(currentUser, roles, row);
+        return (
+          <div
+            className="flex items-center justify-end gap-1"
+            onClick={(e) => e.stopPropagation()}
           >
-            <Eye size={16} />
-          </button>
-          {canEdit && (
+            {showApprove && (
+              <button
+                type="button"
+                onClick={() => handleQuickApprove(row)}
+                className="inline-flex items-center justify-center p-1.5 text-emerald-600 rounded-md hover:bg-emerald-50 hover:text-emerald-700"
+                title="Phê duyệt"
+                aria-label="Phê duyệt"
+              >
+                <BadgeCheck size={18} strokeWidth={1.75} />
+              </button>
+            )}
             <button
               type="button"
-              onClick={(e) => openEdit(row, e)}
-              className="p-1.5 text-gray-400 hover:text-blue-600 rounded-md hover:bg-blue-50"
-              title="Sửa"
+              onClick={() => navigate(`/tasks/${row.id}`)}
+              className="p-1.5 text-gray-400 hover:text-primary-600 rounded-md hover:bg-primary-50"
+              title="Xem"
             >
-              <Edit2 size={16} />
+              <Eye size={16} />
             </button>
-          )}
-          {canDelete && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setDeleteTarget(row);
-              }}
-              className="p-1.5 text-gray-400 hover:text-red-600 rounded-md hover:bg-red-50"
-              title="Xóa"
-            >
-              <Trash2 size={16} />
-            </button>
-          )}
-        </div>
-      ),
+            {canOpenTaskWorkspace(row) && (
+              <button
+                type="button"
+                onClick={(e) => openEdit(row, e)}
+                className="p-1.5 text-gray-400 hover:text-blue-600 rounded-md hover:bg-blue-50"
+                title={
+                  canEditTaskMeta(currentUser, roles, row) ? 'Sửa' : 'Cập nhật tiến độ'
+                }
+              >
+                <Edit2 size={16} />
+              </button>
+            )}
+            {canDelete && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setDeleteTarget(row);
+                }}
+                className="p-1.5 text-gray-400 hover:text-red-600 rounded-md hover:bg-red-50"
+                title="Xóa"
+              >
+                <Trash2 size={16} />
+              </button>
+            )}
+          </div>
+        );
+      },
     },
   ];
 
@@ -535,279 +441,6 @@ export default function Tasks() {
         total={total}
         pageSize={pageSize}
       />
-
-      <Modal
-        isOpen={formOpen}
-        onClose={() => setFormOpen(false)}
-        title={editingId ? PAGE_COPY.tasks.editModal : PAGE_COPY.tasks.createModal}
-        size="xl"
-      >
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <FormField label="Tên việc" required>
-            <input
-              type="text"
-              value={formData.title || ''}
-              onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-              className={inputClass}
-              placeholder="Việc cần làm là gì?"
-              required
-            />
-          </FormField>
-
-          <FormField label="Mô tả">
-            <textarea
-              value={formData.description || ''}
-              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              className={textareaClass}
-              rows={3}
-              placeholder="Chi tiết (tuỳ chọn)"
-            />
-          </FormField>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <FormField label="Phòng phụ trách" required>
-              <select
-                value={formData.assignedDepartmentId || ''}
-                onChange={(e) =>
-                  setFormData({
-                    ...formData,
-                    assignedDepartmentId: e.target.value,
-                    assigneeId: '',
-                  })
-                }
-                className={selectClass}
-                required
-              >
-                <option value="">Chọn phòng</option>
-                {departments.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                  </option>
-                ))}
-              </select>
-            </FormField>
-
-            <FormField label="Người làm">
-              <select
-                value={formData.assigneeId || ''}
-                onChange={(e) => setFormData({ ...formData, assigneeId: e.target.value })}
-                className={selectClass}
-              >
-                <option value="">Chưa giao người</option>
-                {users
-                  .filter((u) => u.departmentId === formData.assignedDepartmentId && u.isActive)
-                  .map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.fullName}
-                    </option>
-                  ))}
-              </select>
-            </FormField>
-
-            <FormField label="Loại việc" required>
-              <select
-                value={formData.categoryId || ''}
-                onChange={(e) => setFormData({ ...formData, categoryId: e.target.value })}
-                className={selectClass}
-                required
-              >
-                <option value="">Chọn loại</option>
-                {taskCategories.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </FormField>
-
-            <FormField label="Lĩnh vực">
-              <select
-                value={formData.fieldId || ''}
-                onChange={(e) => setFormData({ ...formData, fieldId: e.target.value })}
-                className={selectClass}
-              >
-                <option value="">Không chọn</option>
-                {fields.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
-              </select>
-            </FormField>
-
-            <FormField label="Mức độ khẩn">
-              <select
-                value={formData.urgency || 'THUONG'}
-                onChange={(e) =>
-                  setFormData({ ...formData, urgency: e.target.value as UrgencyLevel })
-                }
-                className={selectClass}
-              >
-                <option value="THUONG">{URGENCY_LABELS.THUONG}</option>
-                <option value="KHAN">{URGENCY_LABELS.KHAN}</option>
-                <option value="THUONG_KHAN">{URGENCY_LABELS.THUONG_KHAN}</option>
-              </select>
-            </FormField>
-
-            <FormField label="Ngày bắt đầu">
-              <input
-                type="date"
-                value={formData.startDate || ''}
-                onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
-                className={inputClass}
-              />
-            </FormField>
-
-            <FormField label="Hạn hoàn thành" required>
-              <input
-                type="date"
-                value={formData.dueDate || ''}
-                onChange={(e) => setFormData({ ...formData, dueDate: e.target.value })}
-                className={inputClass}
-                required
-              />
-            </FormField>
-
-            <FormField label="Tiến độ">
-              <select
-                value={snapProgressToLevel(formData.progress ?? 0)}
-                onChange={(e) =>
-                  setFormData({
-                    ...formData,
-                    progress: Number(e.target.value) as ProgressLevelValue,
-                  })
-                }
-                className={selectClass}
-              >
-                {PROGRESS_LEVELS.map((lv) => (
-                  <option key={lv.value} value={lv.value}>
-                    {lv.label}
-                  </option>
-                ))}
-              </select>
-            </FormField>
-          </div>
-
-          <div className="rounded-xl border border-slate-200 p-4 space-y-4 bg-slate-50/40">
-            <p className="text-sm font-bold text-slate-800">Thông tin thêm (báo cáo)</p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FormField label="Lãnh đạo chủ trì">
-                <input
-                  type="text"
-                  value={formData.chairLeaderName || ''}
-                  onChange={(e) => setFormData({ ...formData, chairLeaderName: e.target.value })}
-                  className={inputClass}
-                  placeholder="Họ tên"
-                />
-              </FormField>
-              <FormField label="Mã ngoài (nếu có)">
-                <input
-                  type="text"
-                  value={formData.externalTaskId || ''}
-                  onChange={(e) => setFormData({ ...formData, externalTaskId: e.target.value })}
-                  className={inputClass}
-                  placeholder="Mã trên hệ thống khác"
-                />
-              </FormField>
-            </div>
-            <FormField label="Đầu mối">
-              <textarea
-                value={formData.focalPointText || ''}
-                onChange={(e) => setFormData({ ...formData, focalPointText: e.target.value })}
-                className={textareaClass}
-                rows={2}
-                placeholder="Tổ / nhóm / người liên hệ"
-              />
-            </FormField>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FormField label="Nguồn việc">
-                <select
-                  value={formData.sourceKind || ''}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      sourceKind: (e.target.value || null) as DocumentSourceKind | null,
-                    })
-                  }
-                  className={selectClass}
-                >
-                  <option value="">Không chọn</option>
-                  {(Object.keys(DOCUMENT_SOURCE_KIND_LABELS) as DocumentSourceKind[]).map((k) => (
-                    <option key={k} value={k}>
-                      {DOCUMENT_SOURCE_KIND_LABELS[k]}
-                    </option>
-                  ))}
-                </select>
-              </FormField>
-              <FormField label="Số / trích nguồn">
-                <input
-                  type="text"
-                  value={formData.sourceCitation || ''}
-                  onChange={(e) => setFormData({ ...formData, sourceCitation: e.target.value })}
-                  className={inputClass}
-                  placeholder="VD: CV-1245/UBND-TB"
-                />
-              </FormField>
-            </div>
-            <FormField label="Kết quả">
-              <textarea
-                value={formData.executionResult || ''}
-                onChange={(e) => setFormData({ ...formData, executionResult: e.target.value })}
-                className={textareaClass}
-                rows={2}
-                placeholder="Đã làm được gì"
-              />
-            </FormField>
-            <FormField label="Lộ trình">
-              <textarea
-                value={formData.roadmap || ''}
-                onChange={(e) => setFormData({ ...formData, roadmap: e.target.value })}
-                className={textareaClass}
-                rows={2}
-                placeholder="Các bước dự kiến"
-              />
-            </FormField>
-            <FormField label="Người duyệt">
-              <select
-                value={formData.approverUserId || ''}
-                onChange={(e) => setApproverFromUserId(e.target.value)}
-                className={selectClass}
-              >
-                <option value="">Chưa chọn</option>
-                {users
-                  .filter((u) => u.isActive)
-                  .map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.fullName} · {u.departmentName || u.position || u.email}
-                    </option>
-                  ))}
-              </select>
-              {formData.approverUserId && (
-                <p className="mt-1.5 text-xs text-slate-500">
-                  {formData.approverEmail || '—'}
-                  {formData.approverPhone ? ` · ${formData.approverPhone}` : ''}
-                </p>
-              )}
-            </FormField>
-          </div>
-
-          <div className="flex justify-end gap-3 pt-6 border-t border-gray-100">
-            <button
-              type="button"
-              onClick={() => setFormOpen(false)}
-              className="px-4 py-2 text-sm font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg"
-            >
-              Hủy
-            </button>
-            <button
-              type="submit"
-              className="px-4 py-2 text-sm font-semibold text-white bg-primary-600 hover:bg-primary-700 rounded-lg"
-            >
-              {editingId ? 'Lưu' : 'Giao việc'}
-            </button>
-          </div>
-        </form>
-      </Modal>
 
       <ConfirmDialog
         isOpen={!!deleteTarget}

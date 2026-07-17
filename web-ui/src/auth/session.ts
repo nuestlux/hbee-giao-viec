@@ -99,13 +99,26 @@ export function getUserPassword(userId: string): string {
 }
 
 export function verifyUserPassword(userId: string, password: string): boolean {
-  return getUserPassword(userId) === password;
+  return getUserPassword(userId) === password.trim();
 }
 
 export function setUserPassword(userId: string, newPassword: string): void {
   const map = loadPasswordMap();
   map[userId] = newPassword;
   savePasswordMap(map);
+}
+
+/** Xóa mật khẩu tùy chỉnh → quay về mật khẩu demo mặc định. */
+export function clearUserPasswordOverride(userId: string): void {
+  const map = loadPasswordMap();
+  if (!(userId in map)) return;
+  delete map[userId];
+  savePasswordMap(map);
+}
+
+/** Xóa mọi override (dùng khi demo không đăng nhập được). */
+export function clearAllPasswordOverrides(): void {
+  safeRemove(localStorage, USER_PASSWORDS_KEY);
 }
 
 export type ChangePasswordError =
